@@ -1,4 +1,4 @@
-// Renders the Park Venue from art/models/, reading Sim states and interpolating between the last two.
+// Renders the current Venue from art/models/, reading Sim states and interpolating between the last two.
 import * as THREE from 'three';
 import {
   BALL_RADIUS,
@@ -17,6 +17,7 @@ import {
   type Vec3,
 } from '../sim';
 import type { ViewTuning } from '../tuning';
+import { VENUES, type Venue } from '../venue/venues';
 import { Character } from './character';
 import { DEFAULT_PLAYER_COLORS, type Models, type PlayerColors } from './models';
 
@@ -27,18 +28,6 @@ const COLORS = {
   aim: 0xffd23f,
   landing: 0xffd23f,
 };
-
-/** Each Side's look: the model's default colors, with these regions changed. */
-const LOOKS: Partial<PlayerColors>[] = [
-  { shirt: '#ff7a3d' },
-  { shirt: '#8a5cf6', hair: '#e0a13a', skin: '#c68a5e', paddle: '#3aa0e8' },
-];
-
-/** The Park's lighting: one sun plus a hemisphere light, by day and at sunset. */
-const LIGHTING = {
-  day: { sky: 0x8fd3ff, hemiSky: 0xffffff, hemiGround: 0x5a7a4a, hemiIntensity: 1.6, sun: 0xfff1d6, sunIntensity: 2.2, sunPos: [-6, 12, 4] },
-  sunset: { sky: 0xf4a26b, hemiSky: 0xffd9bf, hemiGround: 0x6b4f63, hemiIntensity: 1.75, sun: 0xffa866, sunIntensity: 2.5, sunPos: [-10, 6, -6] },
-} as const;
 
 /** The Side this screen belongs to. */
 const LOCAL_SIDE = 0;
@@ -75,7 +64,10 @@ export class Renderer {
   private cameraX = 0;
   private hemi = new THREE.HemisphereLight();
   private sun = new THREE.DirectionalLight();
-  /** The lighting last applied: sunset or day (null before the first). */
+  private venue: Venue = VENUES.park;
+  /** The Venue's surroundings on show. */
+  private surroundings: THREE.Object3D | null = null;
+  /** The lighting last applied: sunset or day (null before the first, or after a Venue change). */
   private appliedSunset: boolean | null = null;
   /** Every model shares one flat-shaded, vertex-colored material (the net gets a see-through copy). */
   private material = new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true });
@@ -96,7 +88,7 @@ export class Renderer {
     this.applyLighting();
 
     this.scene.add(this.world);
-    this.buildVenue(models);
+    this.buildCourt(models);
 
     this.ball = new THREE.Mesh(
       new THREE.IcosahedronGeometry(BALL_RADIUS, 1),
@@ -117,7 +109,7 @@ export class Renderer {
     this.landing = landingMarker();
     this.world.add(this.landing);
 
-    this.players = [0, 1].map((i) => this.buildPlayer(models, { ...DEFAULT_PLAYER_COLORS, ...LOOKS[i] }));
+    this.players = [0, 1].map(() => this.buildPlayer(models, DEFAULT_PLAYER_COLORS));
 
     this.resize();
     window.addEventListener('resize', () => this.resize());
@@ -127,6 +119,23 @@ export class Renderer {
   get stats() {
     const { calls, triangles } = this.renderer.info.render;
     return { calls, triangles };
+  }
+
+  /** Shows `venue`: its surroundings (from art/models/) and lighting. */
+  setVenue(venue: Venue, surroundings: THREE.Object3D) {
+    this.venue = venue;
+    this.appliedSunset = null;
+    if (this.surroundings) this.world.remove(this.surroundings);
+    surroundings.traverse((o) => {
+      if (o instanceof THREE.Mesh) o.material = this.material;
+    });
+    this.surroundings = surroundings;
+    this.world.add(surroundings);
+  }
+
+  /** A Side's colors: the local Player's from the locker, the Bot's from its Venue. */
+  setColors(side: SideIndex, colors: PlayerColors) {
+    this.players[side].character.setColors(colors);
   }
 
   /** A cut to another moment (into or out of a Replay): drops the ball trail, which would streak across the jump. */
@@ -277,7 +286,7 @@ export class Renderer {
   private applyLighting() {
     if (this.appliedSunset === this.view.sunset) return;
     this.appliedSunset = this.view.sunset;
-    const l = this.appliedSunset ? LIGHTING.sunset : LIGHTING.day;
+    const l = this.appliedSunset ? this.venue.lighting.sunset : this.venue.lighting.day;
     (this.scene.background as THREE.Color).setHex(l.sky);
     this.hemi.color.setHex(l.hemiSky);
     this.hemi.groundColor.setHex(l.hemiGround);
@@ -287,9 +296,9 @@ export class Renderer {
     this.sun.position.set(l.sunPos[0], l.sunPos[1], l.sunPos[2]);
   }
 
-  /** The Park, court, net and posts, all from art/models/. */
-  private buildVenue(models: Models) {
-    for (const model of [models.park, models.court, models.netFrame]) {
+  /** The court, net and posts, all from art/models/. */
+  private buildCourt(models: Models) {
+    for (const model of [models.court, models.netFrame]) {
       model.traverse((o) => {
         if (o instanceof THREE.Mesh) o.material = this.material;
       });

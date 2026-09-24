@@ -6,7 +6,6 @@ import { GLTFLoader, type GLTF } from 'three/addons/loaders/GLTFLoader.js';
 import palette from '../../art/palette.json';
 import courtUrl from '../../art/models/court.glb?url';
 import equipmentUrl from '../../art/models/equipment.glb?url';
-import parkUrl from '../../art/models/park.glb?url';
 import playerUrl from '../../art/models/player.glb?url';
 
 /** The Player's rigid parts, as art/scripts/player.py names them. */
@@ -26,19 +25,31 @@ export interface Models {
   net: THREE.Mesh;
   /** Net tape, cord and posts. */
   netFrame: THREE.Object3D;
-  park: THREE.Object3D;
 }
 
 export async function loadModels(): Promise<Models> {
   const loader = new GLTFLoader();
-  const [player, court, equipment, park] = await Promise.all([playerUrl, courtUrl, equipmentUrl, parkUrl].map((url) => loader.loadAsync(url)));
+  const [player, court, equipment] = await Promise.all([playerUrl, courtUrl, equipmentUrl].map((url) => loader.loadAsync(url)));
   return {
     player: readPlayer(player),
     court: court.scene,
     net: equipment.scene.getObjectByName('net') as THREE.Mesh,
     netFrame: equipment.scene.getObjectByName('netFrame')!,
-    park: park.scene,
   };
+}
+
+const surroundings = new Map<string, Promise<THREE.Object3D>>();
+
+/** A Venue's surroundings (one mesh; see art/README.md), loaded once and kept. */
+export function loadSurroundings(url: string): Promise<THREE.Object3D> {
+  let model = surroundings.get(url);
+  if (!model) {
+    model = new GLTFLoader().loadAsync(url).then((gltf) => gltf.scene);
+    // A failed load can be retried.
+    model.catch(() => surroundings.delete(url));
+    surroundings.set(url, model);
+  }
+  return model;
 }
 
 export function readPlayer(gltf: GLTF): PlayerParts {

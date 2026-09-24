@@ -111,6 +111,11 @@ export class Hud {
     this.shoutEl.classList.add('pop');
   }
 
+  /** Adds a sentence to the banner's detail line (a Venue unlocked, say). */
+  note(text: string) {
+    this.appendDetail(text);
+  }
+
   private appendDetail(text: string) {
     this.detail.textContent = `${this.detail.textContent} ${text}`.trim();
   }

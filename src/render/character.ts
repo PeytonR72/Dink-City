@@ -64,6 +64,8 @@ export class Character {
   private arms: [THREE.Mesh, THREE.Mesh][];
   private shoes: THREE.Mesh[];
   private paddle: THREE.Mesh;
+  /** Every part mesh, with the part it shows, for recoloring. */
+  private parts: [THREE.Mesh, PartName][] = [];
   private walkPhase = 0;
   private walkBlend = 0;
   /** Smoothed hand targets, so pose changes never snap. */
@@ -73,11 +75,14 @@ export class Character {
   private crouch = 0;
 
   /** `colors` recolors the model's regions (shirt, skin, paddle, ...) for this Player. */
-  constructor(parts: PlayerParts, colors: PlayerColors, material: THREE.Material) {
-    const geometry = {} as PlayerParts;
-    for (const name of Object.keys(parts) as PartName[]) geometry[name] = recolor(parts[name], PLAYER_REGIONS, colors);
+  constructor(
+    private source: PlayerParts,
+    colors: PlayerColors,
+    material: THREE.Material,
+  ) {
     const mesh = (name: PartName, parent: THREE.Object3D = this.root) => {
-      const m = new THREE.Mesh(geometry[name], material);
+      const m = new THREE.Mesh(undefined, material);
+      this.parts.push([m, name]);
       parent.add(m);
       return m;
     };
@@ -95,6 +100,16 @@ export class Character {
     this.shoes = [mesh('shoe'), mesh('shoe')];
     // The paddle points along +y from the hand (handle in the hand).
     this.paddle = mesh('paddle');
+    this.setColors(colors);
+  }
+
+  /** Recolors the model's regions (shirt, skin, paddle, ...). */
+  setColors(colors: PlayerColors) {
+    const geometry = {} as PlayerParts;
+    for (const name of Object.keys(this.source) as PartName[]) geometry[name] = recolor(this.source[name], PLAYER_REGIONS, colors);
+    const old = new Set(this.parts.map(([m]) => m.geometry));
+    for (const [m, name] of this.parts) m.geometry = geometry[name];
+    for (const g of old) g.dispose();
   }
 
   update(pose: CharacterPose, dt: number) {

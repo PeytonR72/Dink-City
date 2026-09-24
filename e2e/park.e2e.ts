@@ -48,10 +48,11 @@ test('the Park stays within the performance budget during a Rally', async ({ pag
   expect(stats.triangles).toBeLessThan(50_000);
 });
 
-test('the menu opens first, and Play starts a Match', async ({ page }) => {
+test('the map opens first, with only the Park open, and the Park starts a Match', async ({ page }) => {
   await page.goto('/');
   await expect(page.getByRole('heading', { name: 'Dink City' })).toBeVisible();
-  await page.getByRole('button', { name: 'Play' }).click();
+  await expect(page.getByRole('button', { name: /The Rooftop: locked/ })).toBeVisible();
+  await page.getByRole('button', { name: /The Park/ }).click();
   await expect(page.locator('#menu')).toBeHidden();
   await expect(page.locator('#scoreboard')).toBeVisible();
 });

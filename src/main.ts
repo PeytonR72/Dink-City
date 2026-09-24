@@ -1,63 +1,105 @@
-import { startAmbience, updateAmbience } from './audio/ambience';
+import { setAmbience, updateAmbience } from './audio/ambience';
 import { playEvents, unlockAudio } from './audio/sfx';
 import { DIFFICULTY, createBot, type Bot } from './bot/bot';
 import { observe } from './bot/observe';
 import { PERSONALITY, type PersonalityName } from './bot/personality';
 import { Hud } from './hud/hud';
 import { Input } from './input/input';
+import { Locker } from './menu/locker';
+import { CityMap } from './menu/map';
 import { Overlay, SettingsPanel } from './menu/menu';
-import { loadModels } from './render/models';
+import { DEFAULT_PLAYER_COLORS, loadModels, loadSurroundings } from './render/models';
 import { Renderer } from './render/renderer';
 import { createReplay, type Replay } from './replay/replay';
+import { loadColors, saveColors } from './save/colors';
+import { isUnlocked, loadProgress, recordWin, saveProgress } from './save/progress';
 import { loadSettings, saveSettings, withFlags, type Settings } from './save/settings';
 import { browserStore } from './save/store';
 import { DEFAULT_MATCH, TICK, createInitialState, endOf, step, type Intent, type SimEvent, type SimState } from './sim';
 import { simTuning, viewTuning } from './tuning';
+import { VENUE_ASSETS } from './venue/assets';
+import { VENUES, VENUE_IDS, type VenueId } from './venue/venues';
 
 const MAX_FRAME = 0.25;
 const LOCAL = 0;
 
 // Flags for playtesting override the saved Settings: ?rally, ?bo3, ?bot=easy|medium|hard, ?sunset.
-// ?play skips the menu and starts a Match. ?personality=dinker|banger|lobber overrides the Bot's Personality.
+// ?play skips the menu and starts a Match; ?venue=park|rooftop|beach picks its Venue, locked or not.
+// ?personality=dinker|banger|lobber overrides the Venue Bot's Personality.
 const params = new URLSearchParams(location.search);
 const store = browserStore();
 let saved = loadSettings(store);
 const settings = (): Settings => withFlags(saved, params);
+let progress = loadProgress(store);
+let colors = loadColors(store);
 
 const canvas = document.querySelector<HTMLCanvasElement>('#game')!;
-const models = await loadModels().catch((e) => {
+const failed = (e: unknown): never => {
   document.body.insertAdjacentHTML('beforeend', '<p style="position:fixed;inset:40% 0;text-align:center">Could not load the court. Please reload.</p>');
   throw e;
-});
+};
+const models = await loadModels().catch(failed);
 const renderer = new Renderer(canvas, viewTuning, simTuning, models);
+renderer.setColors(LOCAL, colors);
 const input = new Input();
 const hud = new Hud(document.querySelector('#hud')!, LOCAL);
 unlockAudio();
-void startAmbience(viewTuning);
 
-type Mode = 'menu' | 'match' | 'paused';
+const flagVenue = params.get('venue') as VenueId | null;
+/** The Venue on show: the flag's, or the furthest one open. */
+let venue: VenueId = flagVenue && VENUE_IDS.includes(flagVenue) ? flagVenue : VENUE_IDS.filter((id) => isUnlocked(progress, id)).at(-1)!;
+await showVenue(venue).catch(failed);
+
+/** Puts `id`'s surroundings, lighting, ambience and Bot look on show. */
+async function showVenue(id: VenueId) {
+  const surroundings = await loadSurroundings(VENUE_ASSETS[id].model);
+  venue = id;
+  renderer.setVenue(VENUES[id], surroundings);
+  renderer.setColors(1, { ...DEFAULT_PLAYER_COLORS, ...VENUES[id].bot });
+  void setAmbience(VENUE_ASSETS[id].ambience, viewTuning);
+}
+
+type Mode = 'menu' | 'locker' | 'match' | 'paused';
 let mode: Mode = 'menu';
 
 const menu = new Overlay(
   'menu',
   `<h1>Dink City</h1>
-  <button id="play" class="primary" autofocus>Play</button>
-  <h2>Settings</h2>`,
+  <div class="menu-body">
+    <div class="menu-map"></div>
+    <div class="menu-side">
+      <h2>Settings</h2>
+      <button id="open-locker">Locker</button>
+    </div>
+  </div>`,
 );
-menu.el.append(
+const map = new CityMap((id) => void playVenue(id));
+menu.el.querySelector('.menu-map')!.append(map.el);
+menu.el.querySelector('#open-locker')!.before(
   new SettingsPanel(saved, (s) => {
     saved = s;
     saveSettings(store, s);
     viewTuning.sunset = settings().sunset;
   }).el,
 );
-menu.on('#play', () => startMatch());
+menu.on('#open-locker', () => setMode('locker'));
+
+const locker = new Locker(
+  models.player,
+  colors,
+  (c) => {
+    colors = c;
+    saveColors(store, c);
+    renderer.setColors(LOCAL, c);
+  },
+  () => setMode('menu'),
+);
 
 const pause = new Overlay(
   'pause',
   `<h1>Paused</h1>
   <button id="resume" class="primary">Resume</button>
-  <button id="quit">Quit to menu</button>`,
+  <button id="quit">Quit to map</button>`,
 );
 pause.on('#resume', () => setMode('match'));
 pause.on('#quit', () => setMode('menu'));
@@ -65,6 +107,8 @@ pause.on('#quit', () => setMode('menu'));
 let bot: Bot;
 let prev: SimState;
 let curr: SimState;
+/** The Difficulty of the Match in play, for its star. */
+let difficulty = settings().difficulty;
 /** The current Rally's start state and every Tick's Intents since: enough to replay it. */
 let rally: { start: SimState; intents: [Intent, Intent][] };
 /** The Fault Replay playing, or waiting `replayIn` seconds to start. */
@@ -76,10 +120,12 @@ let last = performance.now();
 let hitStop = 0;
 const eventLog: ({ tick: number } & SimEvent)[] = [];
 
+/** A new Match against the Bot of the Venue on show. */
 function newMatch(seed: number) {
   const s = settings();
+  difficulty = s.difficulty;
   viewTuning.sunset = s.sunset;
-  const personality = PERSONALITY[(params.get('personality') as PersonalityName) ?? 'dinker'] ?? PERSONALITY.dinker;
+  const personality = PERSONALITY[params.get('personality') as PersonalityName] ?? PERSONALITY[VENUES[venue].personality];
   bot = createBot(1, seed ^ 0x5eed, DIFFICULTY[s.difficulty], simTuning, personality);
   curr = prev = createInitialState(seed, { ...DEFAULT_MATCH, rallyScoring: s.rallyScoring, bestOf: s.bestOf });
   rally = { start: curr, intents: [] };
@@ -87,16 +133,31 @@ function newMatch(seed: number) {
   hud.reset();
 }
 
-function startMatch() {
+async function playVenue(id: VenueId) {
+  await showVenue(id);
   newMatch(Date.now());
   setMode('match');
+}
+
+/** A Match won: a star for this Difficulty, and maybe the next Venue opens. */
+function onMatchWon() {
+  const before = VENUE_IDS.filter((id) => isUnlocked(progress, id));
+  progress = recordWin(progress, venue, difficulty);
+  saveProgress(store, progress);
+  const opened = VENUE_IDS.find((id) => isUnlocked(progress, id) && !before.includes(id));
+  if (opened) hud.note(`${VENUES[opened].name} is open!`);
 }
 
 function setMode(m: Mode) {
   mode = m;
   menu.el.hidden = m !== 'menu';
   pause.el.hidden = m !== 'paused';
-  if (m === 'menu') menu.show();
+  if (m === 'locker') locker.show();
+  else locker.hide();
+  if (m === 'menu') {
+    map.refresh(progress);
+    map.focusFirst();
+  }
   if (m === 'paused') pause.show();
   if (m === 'match') (document.activeElement as HTMLElement | null)?.blur?.();
   document.body.dataset.mode = m;
@@ -130,7 +191,10 @@ if (import.meta.env.DEV && params.has('debug')) {
   viewTuning,
   eventLog,
   newMatch,
-  startMatch,
+  playVenue,
+  get progress() {
+    return progress;
+  },
   /** Draw calls and triangles of the last frame. */
   get stats() {
     return renderer.stats;
@@ -164,6 +228,7 @@ function tick(local: Intent = input.sample()) {
   playEvents(curr.events, endOf(curr, LOCAL), viewTuning);
   for (const e of curr.events) {
     eventLog.push({ tick: curr.tick, ...e });
+    if (e.kind === 'match' && e.winner === LOCAL) onMatchWon();
     if (e.kind === 'hit' && (e.variant === 'smash' || e.speed >= viewTuning.hitStopSpeed)) hitStop = viewTuning.hitStopMs / 1000;
     // A double bounce is a winner, not a rule break, so it gets no Replay.
     if (e.kind === 'dead' && e.reason !== 'double-bounce') {
@@ -219,6 +284,7 @@ function update(dt: number) {
     if (mode === 'match' && curr.phase === 'over') setMode('menu');
     else if (mode === 'match') setMode('paused');
     else if (mode === 'paused') setMode('match');
+    else if (mode === 'locker') setMode('menu');
   }
 
   if (mode !== 'match') {
