@@ -7,8 +7,8 @@ import { fileURLToPath } from 'node:url';
 
 const root = dirname(fileURLToPath(import.meta.url));
 const blender = process.env.BLENDER ?? 'C:/Program Files/Blender Foundation/Blender 5.2/blender.exe';
-// park renders its preview with the court and net, so it goes after them.
-const all = ['player', 'equipment', 'court', 'park', 'ambience'];
+// The Venues render their previews with the court and net, so they go after them.
+const all = ['player', 'equipment', 'court', 'park', 'rooftop', 'beach', 'ambience'];
 const scripts = process.argv.length > 2 ? process.argv.slice(2) : all;
 
 if (!existsSync(blender)) {
