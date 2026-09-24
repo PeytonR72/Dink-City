@@ -2,6 +2,7 @@
 
 Status: ready-for-agent
 Blocked by: 01
+Handoff: `.scratch/v1/handoff-02.md` (read this before starting)
 
 ## Goal
 
