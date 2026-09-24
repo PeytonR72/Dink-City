@@ -2,6 +2,7 @@ import { startAmbience, updateAmbience } from './audio/ambience';
 import { playEvents, unlockAudio } from './audio/sfx';
 import { DIFFICULTY, createBot, type Bot } from './bot/bot';
 import { observe } from './bot/observe';
+import { PERSONALITY, type PersonalityName } from './bot/personality';
 import { Hud } from './hud/hud';
 import { Input } from './input/input';
 import { Overlay, SettingsPanel } from './menu/menu';
@@ -17,7 +18,7 @@ const MAX_FRAME = 0.25;
 const LOCAL = 0;
 
 // Flags for playtesting override the saved Settings: ?rally, ?bo3, ?bot=easy|medium|hard, ?sunset.
-// ?play skips the menu and starts a Match.
+// ?play skips the menu and starts a Match. ?personality=dinker|banger|lobber overrides the Bot's Personality.
 const params = new URLSearchParams(location.search);
 const store = browserStore();
 let saved = loadSettings(store);
@@ -78,7 +79,8 @@ const eventLog: ({ tick: number } & SimEvent)[] = [];
 function newMatch(seed: number) {
   const s = settings();
   viewTuning.sunset = s.sunset;
-  bot = createBot(1, seed ^ 0x5eed, DIFFICULTY[s.difficulty], simTuning);
+  const personality = PERSONALITY[(params.get('personality') as PersonalityName) ?? 'dinker'] ?? PERSONALITY.dinker;
+  bot = createBot(1, seed ^ 0x5eed, DIFFICULTY[s.difficulty], simTuning, personality);
   curr = prev = createInitialState(seed, { ...DEFAULT_MATCH, rallyScoring: s.rallyScoring, bestOf: s.bestOf });
   rally = { start: curr, intents: [] };
   endReplay();

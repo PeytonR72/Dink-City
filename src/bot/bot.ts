@@ -88,9 +88,33 @@ export const DIFFICULTY = {
   },
 } satisfies Record<string, Difficulty>;
 
-/** A Personality is a weighting over Shot types (milestone 05 adds Banger, Dinker, Lobber). */
 export type ShotWeights = Record<ShotType, number>;
-export const NEUTRAL: ShotWeights = { soft: 1, drive: 1, lob: 1 };
+
+/** A Bot's style: a weighting over Shot types, plus a small Difficulty tweak (presets in personality.ts). */
+export interface Personality {
+  weights: ShotWeights;
+  /** Added to the Difficulty's values (chances stay within 0–1). */
+  adjust: Partial<Difficulty>;
+}
+export const NEUTRAL: Personality = { weights: { soft: 1, drive: 1, lob: 1 }, adjust: {} };
+
+/** Difficulty fields that aren't 0–1 chances or fractions. */
+const UNBOUNDED: (keyof Difficulty)[] = ['reactionTicks', 'predictionError'];
+
+/** `base` plus `adjust`, read live, so the debug panel's edits to the preset still apply. */
+function adjusted(base: Difficulty, adjust: Partial<Difficulty>): Difficulty {
+  const d = {} as Difficulty;
+  for (const k of Object.keys(base) as (keyof Difficulty)[]) {
+    Object.defineProperty(d, k, {
+      enumerable: true,
+      get: () => {
+        const v = Math.max(0, base[k] + (adjust[k] ?? 0));
+        return UNBOUNDED.includes(k) ? v : Math.min(1, v);
+      },
+    });
+  }
+  return d;
+}
 
 export interface Bot {
   think(obs: Observation): Intent;
@@ -151,8 +175,10 @@ export function createBot(
   seed: number,
   difficulty: Difficulty,
   t: SimTuning,
-  weights: ShotWeights = NEUTRAL,
+  personality: Personality = NEUTRAL,
 ): Bot {
+  const { weights } = personality;
+  difficulty = adjusted(difficulty, personality.adjust);
   let rng = seed >>> 0;
   const random = () => {
     const [v, n] = nextRandom(rng);
