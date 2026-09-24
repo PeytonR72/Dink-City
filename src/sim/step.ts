@@ -48,6 +48,7 @@ export function createInitialState(seed: number, config: MatchConfig = DEFAULT_M
     commit: null,
     aiming: false,
     swing: null,
+    speed: 0,
   });
   const s: SimState = {
     tick: 0,
@@ -103,7 +104,7 @@ export function step(prev: SimState, intents: readonly [Intent, Intent], t: SimT
       if (s.phase !== 'rally') break;
     }
     if (s.phase === 'rally') checkRolling(s);
-    if (s.phase === 'rally') checkContact(s, intents, t);
+    if (s.phase === 'rally') checkContact(s, intents, t, random);
   } else if (s.phase === 'dead' && s.tick - s.phaseTick >= t.deadTicks) {
     if (s.match.winner !== null) {
       s.phase = 'over';
@@ -143,7 +144,7 @@ function serve(s: SimState, i: SideIndex, shot: ShotType, intent: Intent, t: Sim
   s.phaseTick = s.tick;
 }
 
-function checkContact(s: SimState, intents: readonly [Intent, Intent], t: SimTuning) {
+function checkContact(s: SimState, intents: readonly [Intent, Intent], t: SimTuning, random: () => number) {
   const { ball } = s;
   for (const i of [0, 1] as const) {
     const player = s.sides[i].players[0];
@@ -169,7 +170,7 @@ function checkContact(s: SimState, intents: readonly [Intent, Intent], t: SimTun
     const volley = ball.bouncesSinceHit === 0;
     // The Serve and the return of serve must both bounce (Two-bounce rule).
     const mustBounce = s.shots < 3;
-    hit(s, i, player.commit.type, qualityAt(d, t), intents[i].aim, t);
+    hit(s, i, player.commit.type, d, intents[i].aim, t, random);
     if (volley && mustBounce) die(s, 'two-bounce', i);
     else if (volley && inKitchen(player, t)) die(s, 'kitchen', i);
     return;
@@ -203,14 +204,36 @@ function qualityAt(distance: number, t: SimTuning): number {
   return 1 + (t.edgeQuality - 1) * k;
 }
 
-function hit(s: SimState, i: SideIndex, type: ShotType, quality: number, aim: Vec2, t: SimTuning) {
+/**
+ * `distance` is how far from the sweet spot the ball was met (0 = dead center,
+ * 1 = edge of reach).
+ */
+function hit(s: SimState, i: SideIndex, type: ShotType, distance: number, aim: Vec2, t: SimTuning, random: () => number) {
   const { ball } = s;
+  const player = s.sides[i].players[0];
   const tuning = t.shots[type];
+  const quality = qualityAt(distance, t);
   const weak = 1 - quality;
   const end = endOf(s, i);
   const lateral = localToWorld(end, clamp(aim.x, -1, 1) * tuning.width, 0).x;
-  const depth = Math.max(0.5, depthFor(tuning, aim.y) - weak * tuning.weakDepth);
-  const target = { x: clamp(lateral, -HALF_WIDTH + 0.15, HALF_WIDTH - 0.15), z: facing(end) * depth };
+  let depth = Math.max(0.5, depthFor(tuning, aim.y) - weak * tuning.weakDepth);
+  const target = { x: clamp(lateral, -HALF_WIDTH + 0.15, HALF_WIDTH - 0.15), z: 0 };
+
+  // Moving at Contact: a random miss that grows with speed. Applied after the
+  // in-court clamp, so a shot on the run aimed near a line can go out.
+  const running = Math.min(1, player.speed / t.playerSpeed);
+  const spread = t.moveAimError * running;
+  target.x += (random() + random() - 1) * spread;
+  depth += (random() + random() - 1) * spread;
+
+  // A Soft shot from behind the Kitchen is easy to hit too hard: only a
+  // dead-center, set contact keeps it short.
+  if (type === 'soft') {
+    const beyond = Math.max(0, Math.abs(ball.pos.z) - KITCHEN_DEPTH);
+    const offCenter = clamp((distance - t.softPerfectRadius) / (t.sweetRadius - t.softPerfectRadius), 0, 1);
+    depth += t.softOverhit * beyond * Math.max(offCenter, running) * (0.5 + random());
+  }
+  target.z = facing(end) * Math.max(0.3, depth);
 
   let smash = false;
   let vel: Vec3 | null = null;
@@ -377,6 +400,7 @@ function movePlayer(s: SimState, i: SideIndex, intent: Intent, t: SimTuning) {
   const wasOutsideKitchen = !inKitchen(player, t);
   player.pos.x += (player.vel.x + assistX) * TICK;
   player.pos.z += (player.vel.z + assistZ) * TICK;
+  player.speed = Math.hypot(player.vel.x + assistX, player.vel.z + assistZ);
 
   // The assist owns footwork here, so it must never walk the Player into a Kitchen fault.
   if (player.aiming && ball.bouncesSinceHit === 0 && wasOutsideKitchen && inKitchen(player, t)) {
@@ -419,6 +443,7 @@ function place(p: Player, end: End, x: number) {
   p.vel = { x: 0, y: 0, z: 0 };
   p.commit = null;
   p.aiming = false;
+  p.speed = 0;
 }
 
 function holdBall(s: SimState) {

@@ -37,6 +37,9 @@ export function createDebugPanel(sim: SimTuning, view: ViewTuning) {
   pl.addBinding(sim, 'assistRange', { min: 0, max: 2 });
   pl.addBinding(sim, 'assistSpeed', { min: 0, max: 6 });
   pl.addBinding(sim, 'footRadius', { min: 0, max: 0.4 });
+  pl.addBinding(sim, 'moveAimError', { min: 0, max: 3 });
+  pl.addBinding(sim, 'softOverhit', { min: 0, max: 2 });
+  pl.addBinding(sim, 'softPerfectRadius', { min: 0, max: 0.45 });
   pl.addBinding(sim, 'smashHeight', { min: 1, max: 2.5 });
   pl.addBinding(sim, 'smashSpeed', { min: 10, max: 35 });
 

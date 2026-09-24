@@ -53,6 +53,8 @@ export interface Player {
   aiming: boolean;
   /** Most recent swing, for animation. */
   swing: Swing | null;
+  /** Ground speed over the last Tick (own movement plus assist), in m/s. */
+  speed: number;
 }
 
 export interface Side {
@@ -168,6 +170,13 @@ export interface SimTuning {
    * Kitchen line counts as touching it (which is in the Kitchen).
    */
   footRadius: number;
+
+  /** Aim error, in meters, when hitting at full running speed (random, scaled by speed at Contact). */
+  moveAimError: number;
+  /** Extra Soft depth per meter the contact is behind the Kitchen, at a full miss (scaled by a random 0.5–1.5). */
+  softOverhit: number;
+  /** A Soft met within this normalized sweet-spot distance counts as perfect and isn't overhit. */
+  softPerfectRadius: number;
 
   /** Drive contact at or above this height becomes a Smash. */
   smashHeight: number;
