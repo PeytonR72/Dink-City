@@ -1,8 +1,10 @@
+import { startAmbience, updateAmbience } from './audio/ambience';
 import { playEvents, unlockAudio } from './audio/sfx';
 import { DIFFICULTY, createBot, type Bot } from './bot/bot';
 import { observe } from './bot/observe';
 import { Hud } from './hud/hud';
 import { Input } from './input/input';
+import { loadModels } from './render/models';
 import { Renderer } from './render/renderer';
 import { DEFAULT_MATCH, TICK, createInitialState, endOf, step, type Intent, type MatchConfig, type SimEvent, type SimState } from './sim';
 import { simTuning, viewTuning } from './tuning';
@@ -10,16 +12,23 @@ import { simTuning, viewTuning } from './tuning';
 const MAX_FRAME = 0.25;
 const LOCAL = 0;
 
-// Rule flags for playtesting: ?rally (Rally scoring), ?bo3 (best of 3), ?bot=easy|medium|hard.
+// Flags for playtesting: ?rally (Rally scoring), ?bo3 (best of 3), ?bot=easy|medium|hard, ?sunset.
 const params = new URLSearchParams(location.search);
 const config: MatchConfig = { ...DEFAULT_MATCH, rallyScoring: params.has('rally'), bestOf: params.has('bo3') ? 3 : 1 };
 const difficulty = DIFFICULTY[(params.get('bot') ?? 'medium') as keyof typeof DIFFICULTY] ?? DIFFICULTY.medium;
 
+if (params.has('sunset')) viewTuning.sunset = true;
+
 const canvas = document.querySelector<HTMLCanvasElement>('#game')!;
-const renderer = new Renderer(canvas, viewTuning, simTuning);
+const models = await loadModels().catch((e) => {
+  document.body.insertAdjacentHTML('beforeend', '<p style="position:fixed;inset:40% 0;text-align:center">Could not load the court. Please reload.</p>');
+  throw e;
+});
+const renderer = new Renderer(canvas, viewTuning, simTuning, models);
 const input = new Input();
 const hud = new Hud(document.querySelector('#hud')!, LOCAL);
 unlockAudio();
+void startAmbience(viewTuning);
 
 let bot: Bot;
 let prev: SimState;
@@ -57,6 +66,10 @@ if (import.meta.env.DEV && params.has('debug')) {
   viewTuning,
   eventLog,
   newMatch,
+  /** Draw calls and triangles of the last frame. */
+  get stats() {
+    return renderer.stats;
+  },
   /** Step N Ticks synchronously (works while the tab is hidden). `drive` overrides local input. */
   advance(ticks: number, drive?: (s: SimState) => Intent) {
     for (let i = 0; i < ticks; i++) tick(drive?.(curr));
@@ -99,6 +112,7 @@ function frame(now: number) {
   }
 
   hud.update(curr, dt);
+  updateAmbience(viewTuning);
   renderer.render(prev, curr, acc / TICK, dt);
   requestAnimationFrame(frame);
 }

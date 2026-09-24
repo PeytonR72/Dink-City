@@ -1,0 +1,49 @@
+{
+  "player": {
+    "skin": "#f2c29b",
+    "hair": "#4a2f1f",
+    "shirt": "#ff7a3d",
+    "shorts": "#2b3240",
+    "shoe": "#f4f1ea",
+    "sole": "#3b3f4a",
+    "paddle": "#e8474c",
+    "grip": "#2b2b2b",
+    "eye": "#1d1d24",
+    "cheek": "#f59f8b"
+  },
+  "court": {
+    "grass": "#7cc05a",
+    "apron": "#3f8f5a",
+    "court": "#2f6fb8",
+    "kitchen": "#4a8fd6",
+    "line": "#ffffff"
+  },
+  "equipment": {
+    "post": "#2c3a33",
+    "cap": "#f4f1ea",
+    "net": "#1d2433",
+    "tape": "#ffffff"
+  },
+  "park": {
+    "grass": "#7cc05a",
+    "grassDark": "#69ad4c",
+    "path": "#e8d3a0",
+    "trunk": "#8a5a3b",
+    "leaf": "#4f9e3f",
+    "leafLight": "#6dbb4a",
+    "leafWarm": "#e0a13a",
+    "bush": "#3f8a3a",
+    "flowerPink": "#ff7eb0",
+    "flowerYellow": "#ffd23f",
+    "bench": "#c77c43",
+    "metal": "#39414d",
+    "lamp": "#fff1c1",
+    "fence": "#2f5d4a",
+    "water": "#6fc6e8",
+    "stone": "#c9c1b3",
+    "wall": "#f2e2c4",
+    "wallWarm": "#f0b27a",
+    "roof": "#d9573b",
+    "window": "#8fd3ff"
+  }
+}

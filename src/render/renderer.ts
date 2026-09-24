@@ -1,16 +1,9 @@
-// Graybox renderer. Reads Sim states and interpolates between the last two.
+// Renders the Park Venue from art/models/, reading Sim states and interpolating between the last two.
 import * as THREE from 'three';
 import {
   BALL_RADIUS,
-  COURT_LENGTH,
-  COURT_WIDTH,
-  HALF_LENGTH,
-  HALF_WIDTH,
-  KITCHEN_DEPTH,
-  NET_POST_X,
   TICK,
   endOf,
-  netHeight,
   other,
   predictContact,
   predictLanding,
@@ -25,22 +18,27 @@ import {
 } from '../sim';
 import type { ViewTuning } from '../tuning';
 import { Character } from './character';
+import { DEFAULT_PLAYER_COLORS, type Models, type PlayerColors } from './models';
 
 const COLORS = {
-  sky: 0x8fd3ff,
-  ground: 0x7cc05a,
-  apron: 0x3f8f5a,
-  court: 0x2f6fb8,
-  kitchen: 0x4a8fd6,
   line: 0xffffff,
-  net: 0x1d2433,
-  post: 0x2b2b2b,
   ball: 0xf4e04d,
   shadow: 0x000000,
   aim: 0xffd23f,
   landing: 0xffd23f,
-  sides: [0xff7a3d, 0x8a5cf6],
 };
+
+/** Each Side's look: the model's default colors, with these regions changed. */
+const LOOKS: Partial<PlayerColors>[] = [
+  { shirt: '#ff7a3d' },
+  { shirt: '#8a5cf6', hair: '#e0a13a', skin: '#c68a5e', paddle: '#3aa0e8' },
+];
+
+/** The Park's lighting: one sun plus a hemisphere light, by day and at sunset. */
+const LIGHTING = {
+  day: { sky: 0x8fd3ff, hemiSky: 0xffffff, hemiGround: 0x5a7a4a, hemiIntensity: 1.6, sun: 0xfff1d6, sunIntensity: 2.2, sunPos: [-6, 12, 4] },
+  sunset: { sky: 0xf4a26b, hemiSky: 0xffd9bf, hemiGround: 0x6b4f63, hemiIntensity: 1.75, sun: 0xffa866, sunIntensity: 2.5, sunPos: [-10, 6, -6] },
+} as const;
 
 /** The Side this screen belongs to. */
 const LOCAL_SIDE = 0;
@@ -75,25 +73,30 @@ export class Renderer {
   private trailTick = -1;
   private players: PlayerView[];
   private cameraX = 0;
+  private hemi = new THREE.HemisphereLight();
+  private sun = new THREE.DirectionalLight();
+  /** The lighting last applied: sunset or day (null before the first). */
+  private appliedSunset: boolean | null = null;
+  /** Every model shares one flat-shaded, vertex-colored material (the net gets a see-through copy). */
+  private material = new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true });
 
   constructor(
     canvas: HTMLCanvasElement,
     private view: ViewTuning,
     private sim: SimTuning,
+    models: Models,
   ) {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    this.scene.background = new THREE.Color(COLORS.sky);
+    this.scene.background = new THREE.Color();
 
     this.camera = new THREE.PerspectiveCamera(view.fov, 1, 0.1, 200);
 
-    this.scene.add(new THREE.HemisphereLight(0xffffff, 0x5a7a4a, 1.6));
-    const sun = new THREE.DirectionalLight(0xfff1d6, 2.2);
-    sun.position.set(-6, 12, 4);
-    this.scene.add(sun);
+    this.scene.add(this.hemi, this.sun);
+    this.applyLighting();
 
     this.scene.add(this.world);
-    this.buildCourt();
+    this.buildVenue(models);
 
     this.ball = new THREE.Mesh(
       new THREE.IcosahedronGeometry(BALL_RADIUS, 1),
@@ -114,10 +117,16 @@ export class Renderer {
     this.landing = landingMarker();
     this.world.add(this.landing);
 
-    this.players = [0, 1].map((i) => this.buildPlayer(COLORS.sides[i]));
+    this.players = [0, 1].map((i) => this.buildPlayer(models, { ...DEFAULT_PLAYER_COLORS, ...LOOKS[i] }));
 
     this.resize();
     window.addEventListener('resize', () => this.resize());
+  }
+
+  /** Draw calls and triangles of the last frame, for the performance budget. */
+  get stats() {
+    const { calls, triangles } = this.renderer.info.render;
+    return { calls, triangles };
   }
 
   /** Records where each hit was met, so the swing's forward stroke goes through the ball. */
@@ -131,6 +140,7 @@ export class Renderer {
 
   render(prev: SimState, curr: SimState, alpha: number, dt: number) {
     const v = this.view;
+    this.applyLighting();
     const mirrored = endOf(curr, LOCAL_SIDE) === 1;
     this.world.rotation.y = mirrored ? Math.PI : 0;
     const ballPos = lerpVec(prev.ball.pos, curr.ball.pos, alpha);
@@ -258,61 +268,34 @@ export class Renderer {
     this.camera.updateProjectionMatrix();
   }
 
-  private buildCourt() {
-    const flat = (w: number, d: number, color: number, y: number, x = 0, z = 0) => {
-      const m = new THREE.Mesh(new THREE.PlaneGeometry(w, d), new THREE.MeshLambertMaterial({ color }));
-      m.rotation.x = -Math.PI / 2;
-      m.position.set(x, y, z);
-      this.world.add(m);
-    };
-    flat(80, 80, COLORS.ground, -0.01);
-    flat(COURT_WIDTH + 6, COURT_LENGTH + 8, COLORS.apron, 0);
-    flat(COURT_WIDTH, COURT_LENGTH, COLORS.court, 0.001);
-    flat(COURT_WIDTH, KITCHEN_DEPTH * 2, COLORS.kitchen, 0.0015);
-
-    const LINE = 0.05;
-    const line = (w: number, d: number, x: number, z: number) => flat(w, d, COLORS.line, 0.002, x, z);
-    for (const s of [-1, 1]) {
-      line(LINE, COURT_LENGTH, s * (HALF_WIDTH - LINE / 2), 0); // sidelines
-      line(COURT_WIDTH, LINE, 0, s * (HALF_LENGTH - LINE / 2)); // baselines
-      line(COURT_WIDTH, LINE, 0, s * KITCHEN_DEPTH); // kitchen lines
-      line(LINE, HALF_LENGTH - KITCHEN_DEPTH, 0, s * (KITCHEN_DEPTH + HALF_LENGTH) / 2); // centerlines
-    }
-
-    // Net: a segmented plane whose top edge follows the regulation sag.
-    const netGeo = new THREE.PlaneGeometry(NET_POST_X * 2, 1, 24, 1);
-    const pos = netGeo.attributes.position;
-    for (let i = 0; i < pos.count; i++) {
-      const x = pos.getX(i);
-      pos.setY(i, pos.getY(i) > 0 ? netHeight(x) : 0);
-    }
-    netGeo.computeVertexNormals();
-    const net = new THREE.Mesh(
-      netGeo,
-      new THREE.MeshLambertMaterial({ color: COLORS.net, transparent: true, opacity: 0.7, side: THREE.DoubleSide }),
-    );
-    this.world.add(net);
-
-    const tape = new THREE.MeshLambertMaterial({ color: COLORS.line });
-    const SEGMENTS = 12;
-    for (let i = 0; i < SEGMENTS; i++) {
-      const x0 = -NET_POST_X + (i * 2 * NET_POST_X) / SEGMENTS;
-      const x1 = x0 + (2 * NET_POST_X) / SEGMENTS;
-      const seg = new THREE.Mesh(new THREE.BoxGeometry(x1 - x0, 0.05, 0.03), tape);
-      seg.position.set((x0 + x1) / 2, netHeight((x0 + x1) / 2) - 0.02, 0);
-      this.world.add(seg);
-    }
-
-    const postMat = new THREE.MeshLambertMaterial({ color: COLORS.post });
-    for (const s of [-1, 1]) {
-      const post = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.95, 0.08), postMat);
-      post.position.set(s * NET_POST_X, 0.475, 0);
-      this.world.add(post);
-    }
+  /** Day or sunset lighting, following `view.sunset`. */
+  private applyLighting() {
+    if (this.appliedSunset === this.view.sunset) return;
+    this.appliedSunset = this.view.sunset;
+    const l = this.appliedSunset ? LIGHTING.sunset : LIGHTING.day;
+    (this.scene.background as THREE.Color).setHex(l.sky);
+    this.hemi.color.setHex(l.hemiSky);
+    this.hemi.groundColor.setHex(l.hemiGround);
+    this.hemi.intensity = l.hemiIntensity;
+    this.sun.color.setHex(l.sun);
+    this.sun.intensity = l.sunIntensity;
+    this.sun.position.set(l.sunPos[0], l.sunPos[1], l.sunPos[2]);
   }
 
-  private buildPlayer(color: number): PlayerView {
-    const character = new Character(color);
+  /** The Park, court, net and posts, all from art/models/. */
+  private buildVenue(models: Models) {
+    for (const model of [models.park, models.court, models.netFrame]) {
+      model.traverse((o) => {
+        if (o instanceof THREE.Mesh) o.material = this.material;
+      });
+      this.world.add(model);
+    }
+    models.net.material = Object.assign(this.material.clone(), { transparent: true, opacity: 0.72 });
+    this.world.add(models.net);
+  }
+
+  private buildPlayer(models: Models, colors: PlayerColors): PlayerView {
+    const character = new Character(models.player, colors, this.material);
     const shadow = blobShadow(0.38);
     const ring = new THREE.Mesh(
       new THREE.RingGeometry(0.55, 0.66, 32),

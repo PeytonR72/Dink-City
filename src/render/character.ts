@@ -1,26 +1,23 @@
-// Rigid-part placeholder character with procedural walk, ready stance and
-// swing. Arms and legs use 2-bone IK. The swing is driven by the Sim's
-// predicted Contact tick (ADR-0002): the backswing winds up as Contact nears,
-// and the forward swing fires on the actual hit.
+// The Player: rigid parts from art/models/player.glb, with procedural walk,
+// ready stance and swing. Arms and legs use 2-bone IK. The swing is driven by
+// the Sim's predicted Contact tick (ADR-0002): the backswing winds up as
+// Contact nears, and the forward swing fires on the actual hit.
 //
 // Character space: feet at y = 0, forward is -z, right is +x.
 import * as THREE from 'three';
 import type { ShotVariant } from '../sim';
 import { solveTwoBone } from './ik';
+import { PLAYER_REGIONS, recolor, type PartName, type PlayerColors, type PlayerParts } from './models';
 
-const SKIN = 0xf2c29b;
-const SHORTS = 0x2b3240;
-const PADDLE = 0x222831;
-const HAIR = 0x4a2f1f;
-
-const THIGH = 0.42;
-const SHIN = 0.42;
-const UPPER_ARM = 0.3;
-const FOREARM = 0.28;
+/** Bone lengths; art/scripts/player.py builds the limbs to match. */
+export const BONES = { thigh: 0.42, shin: 0.42, upperArm: 0.3, forearm: 0.28 } as const;
+const { thigh: THIGH, shin: SHIN, upperArm: UPPER_ARM, forearm: FOREARM } = BONES;
 const HIP_Y = 0.86;
 const HIP_X = 0.12;
-const SHOULDER_X = 0.25;
+const SHOULDER_X = 0.29;
 const SHOULDER_Y = 0.52; // above the pelvis
+/** Where the head sits on the torso (the top of the neck). */
+const NECK_Y = 0.62;
 const STRIDE = 0.9;
 
 /** How the swing plays out, per variant: backswing size, and follow-through direction. */
@@ -62,10 +59,11 @@ export class Character {
   readonly root = new THREE.Group();
   private pelvis = new THREE.Group();
   private torso = new THREE.Group();
-  /** [upper, lower] bone boxes per limb; right first. */
+  /** [upper, lower] bone meshes per limb; right first. */
   private legs: [THREE.Mesh, THREE.Mesh][];
   private arms: [THREE.Mesh, THREE.Mesh][];
-  private paddle = new THREE.Group();
+  private shoes: THREE.Mesh[];
+  private paddle: THREE.Mesh;
   private walkPhase = 0;
   private walkBlend = 0;
   /** Smoothed hand targets, so pose changes never snap. */
@@ -74,35 +72,29 @@ export class Character {
   private twist = 0;
   private crouch = 0;
 
-  constructor(color: number) {
-    const shirt = mat(color);
-    const skin = mat(SKIN);
-    const shorts = mat(SHORTS);
+  /** `colors` recolors the model's regions (shirt, skin, paddle, ...) for this Player. */
+  constructor(parts: PlayerParts, colors: PlayerColors, material: THREE.Material) {
+    const geometry = {} as PlayerParts;
+    for (const name of Object.keys(parts) as PartName[]) geometry[name] = recolor(parts[name], PLAYER_REGIONS, colors);
+    const mesh = (name: PartName, parent: THREE.Object3D = this.root) => {
+      const m = new THREE.Mesh(geometry[name], material);
+      parent.add(m);
+      return m;
+    };
 
     this.root.add(this.pelvis);
-    this.pelvis.add(box(0.36, 0.2, 0.22, shorts, 0, 0, 0));
+    mesh('pelvis', this.pelvis);
     this.pelvis.add(this.torso);
     this.torso.position.y = 0.08;
-    this.torso.add(box(0.44, 0.5, 0.26, shirt, 0, 0.3, 0));
-    // A big head: roughly 1:3 head to body.
-    const head = new THREE.Group();
-    head.position.y = 0.78;
-    head.add(box(0.4, 0.4, 0.38, skin, 0, 0.1, 0));
-    head.add(box(0.42, 0.14, 0.4, mat(HAIR), 0, 0.28, 0.02));
-    this.torso.add(head);
+    mesh('torso', this.torso);
+    // A big head: 1:3 head to body.
+    mesh('head', this.torso).position.y = NECK_Y;
 
-    const limb = (w: number, len: number, m: THREE.Material) => {
-      const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, len, w), m);
-      this.root.add(mesh);
-      return mesh;
-    };
-    this.legs = [0, 1].map(() => [limb(0.15, THIGH, shorts), limb(0.13, SHIN, skin)] as [THREE.Mesh, THREE.Mesh]);
-    this.arms = [0, 1].map(() => [limb(0.11, UPPER_ARM, shirt), limb(0.1, FOREARM, skin)] as [THREE.Mesh, THREE.Mesh]);
-
+    this.legs = [0, 1].map(() => [mesh('thigh'), mesh('shin')] as [THREE.Mesh, THREE.Mesh]);
+    this.arms = [0, 1].map(() => [mesh('upperArm'), mesh('forearm')] as [THREE.Mesh, THREE.Mesh]);
+    this.shoes = [mesh('shoe'), mesh('shoe')];
     // The paddle points along +y from the hand (handle in the hand).
-    this.paddle.add(box(0.05, 0.14, 0.05, mat(PADDLE), 0, 0.07, 0));
-    this.paddle.add(box(0.2, 0.24, 0.03, mat(PADDLE), 0, 0.26, 0));
-    this.root.add(this.paddle);
+    this.paddle = mesh('paddle');
   }
 
   update(pose: CharacterPose, dt: number) {
@@ -133,6 +125,7 @@ export class Character {
       const { mid, end } = solveTwoBone(hip, foot, THIGH, SHIN, new THREE.Vector3(0, 0, -1));
       placeBone(this.legs[i][0], hip, mid);
       placeBone(this.legs[i][1], mid, end);
+      this.shoes[i].position.copy(end);
     }
 
     // Swing: pick the hand target from the swing phase.
@@ -220,14 +213,4 @@ function placeBone(mesh: THREE.Mesh, from: THREE.Vector3, to: THREE.Vector3) {
   mesh.position.addVectors(from, to).multiplyScalar(0.5);
   const dir = to.clone().sub(from);
   if (dir.lengthSq() > 1e-9) mesh.quaternion.setFromUnitVectors(UP, dir.normalize());
-}
-
-function mat(color: number): THREE.Material {
-  return new THREE.MeshLambertMaterial({ color, flatShading: true });
-}
-
-function box(w: number, h: number, d: number, m: THREE.Material, x: number, y: number, z: number): THREE.Mesh {
-  const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m);
-  mesh.position.set(x, y, z);
-  return mesh;
 }

@@ -23,6 +23,8 @@ export function createDebugPanel(sim: SimTuning, view: ViewTuning, bot: Difficul
   v.addBinding(view, 'hitStopMs', { min: 0, max: 150, step: 5 });
   v.addBinding(view, 'hitStopSpeed', { min: 5, max: 30, step: 0.5 });
   v.addBinding(view, 'volume', { min: 0, max: 1, step: 0.05 });
+  v.addBinding(view, 'ambience', { min: 0, max: 1, step: 0.05 });
+  v.addBinding(view, 'sunset');
 
   const b = pane.addFolder({ title: 'Bot', expanded: false });
   b.addBinding(bot, 'reactionTicks', { min: 0, max: 40, step: 1 });

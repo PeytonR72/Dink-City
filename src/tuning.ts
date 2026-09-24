@@ -59,12 +59,12 @@ export const simTuning: SimTuning = {
 };
 
 export const viewTuning = {
-  /** Global time factor. Scales real time into Sim Ticks; the Sim itself never sees it. */
+  /** Global time factor. Scales real time into Sim Ticks; the Sim itself never sees it. 1.0 confirmed in playtesting (2026-09-24). */
   gameSpeed: 1.0,
-  fov: 32,
-  cameraHeight: 12.5,
-  cameraDistance: 18,
-  lookAtZ: 0.6,
+  fov: 33,
+  cameraHeight: 15.5,
+  cameraDistance: 20,
+  lookAtZ: 1.25,
   cameraFollowX: 0.25,
   cameraDamping: 3,
   ballScale: 2.2,
@@ -76,6 +76,10 @@ export const viewTuning = {
   hitStopSpeed: 16,
   /** Master volume for sound effects, 0–1. */
   volume: 0.5,
+  /** Venue ambience loudness, relative to `volume`. */
+  ambience: 0.35,
+  /** The Venue's sunset lighting instead of day (`?sunset`). */
+  sunset: false,
 };
 
 export type ViewTuning = typeof viewTuning;

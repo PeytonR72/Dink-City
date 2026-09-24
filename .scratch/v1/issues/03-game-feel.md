@@ -44,3 +44,5 @@ Hitting feels crisp and readable while still using graybox art.
   - Dink and Drop share values but have separate knobs.
   - `predictContact` copies the assist and Contact logic rather than sharing it with `step`.
   - The Serve has no predicted wind-up.
+
+**2026-09-24 (Claude):** The user confirmed Game speed 1.0 after playtesting; recorded in `src/tuning.ts`. Their other feedback (every Bot too good) became issue 07.
