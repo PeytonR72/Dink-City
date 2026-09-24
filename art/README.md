@@ -19,6 +19,7 @@ Each model script renders a workbench preview (vertex colors, studio light) to `
 | --- | --- | --- |
 | `lib.py` | | Shared helpers. Everything is authored in three.js space (y up, forward −z). |
 | `player.py` | `models/player.glb` | The Player's rigid parts (1:3 head to body) and the paddle. Limbs match the bone lengths in `src/render/character.ts`. |
+| `machine.py` | `models/machine.glb` | Practice mode's ball machine: a little robot on wheels with a hopper and a launch tube. |
 | `equipment.py` | `models/equipment.glb` | The net (`net`, drawn see-through) and its tape, cord and posts (`netFrame`). |
 | `court.py` | `models/court.glb` | Apron, court, Kitchens and lines, sized from `src/sim/court.ts`. |
 | `park.py` | `models/park.glb` | The Park Venue's surroundings, as one mesh. Its preview is the whole Venue from the game camera. |

@@ -6,6 +6,7 @@ import { GLTFLoader, type GLTF } from 'three/addons/loaders/GLTFLoader.js';
 import palette from '../../art/palette.json';
 import courtUrl from '../../art/models/court.glb?url';
 import equipmentUrl from '../../art/models/equipment.glb?url';
+import machineUrl from '../../art/models/machine.glb?url';
 import playerUrl from '../../art/models/player.glb?url';
 
 /** The Player's rigid parts, as art/scripts/player.py names them. */
@@ -25,16 +26,19 @@ export interface Models {
   net: THREE.Mesh;
   /** Net tape, cord and posts. */
   netFrame: THREE.Object3D;
+  /** Practice mode's ball machine, drawn in place of Side 1's Player. */
+  machine: THREE.Object3D;
 }
 
 export async function loadModels(): Promise<Models> {
   const loader = new GLTFLoader();
-  const [player, court, equipment] = await Promise.all([playerUrl, courtUrl, equipmentUrl].map((url) => loader.loadAsync(url)));
+  const [player, court, equipment, machine] = await Promise.all([playerUrl, courtUrl, equipmentUrl, machineUrl].map((url) => loader.loadAsync(url)));
   return {
     player: readPlayer(player),
     court: court.scene,
     net: equipment.scene.getObjectByName('net') as THREE.Mesh,
     netFrame: equipment.scene.getObjectByName('netFrame')!,
+    machine: machine.scene,
   };
 }
 

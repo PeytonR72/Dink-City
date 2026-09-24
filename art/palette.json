@@ -98,5 +98,14 @@
     "rock": "#a8a095",
     "rockDark": "#8a8378",
     "grass": "#9ccf6a"
+  },
+  "machine": {
+    "body": "#3aa0e8",
+    "trim": "#f4f1ea",
+    "dark": "#1d2433",
+    "wheel": "#2b2b2b",
+    "tube": "#39414d",
+    "light": "#ffd23f",
+    "ball": "#f4e04d"
   }
 }

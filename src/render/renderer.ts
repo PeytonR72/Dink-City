@@ -61,6 +61,9 @@ export class Renderer {
   private trailPoints: Vec3[] = [];
   private trailTick = -1;
   private players: PlayerView[];
+  /** Practice mode's ball machine, drawn in place of Side 1's Player while `machineOn`. */
+  private machine: THREE.Object3D;
+  private machineOn = false;
   private cameraX = 0;
   private hemi = new THREE.HemisphereLight();
   private sun = new THREE.DirectionalLight();
@@ -110,6 +113,12 @@ export class Renderer {
     this.world.add(this.landing);
 
     this.players = [0, 1].map(() => this.buildPlayer(models, DEFAULT_PLAYER_COLORS));
+    this.machine = models.machine;
+    this.machine.traverse((o) => {
+      if (o instanceof THREE.Mesh) o.material = this.material;
+    });
+    this.machine.visible = false;
+    this.world.add(this.machine);
 
     this.resize();
     window.addEventListener('resize', () => this.resize());
@@ -131,6 +140,13 @@ export class Renderer {
     });
     this.surroundings = surroundings;
     this.world.add(surroundings);
+  }
+
+  /** Practice mode: the ball machine plays Side 1. */
+  setMachine(on: boolean) {
+    this.machineOn = on;
+    this.machine.visible = on;
+    this.players[1].character.root.visible = !on;
   }
 
   /** A Side's colors: the local Player's from the locker, the Bot's from its Venue. */
@@ -180,6 +196,7 @@ export class Renderer {
       pv.character.root.rotation.y = end === 0 ? 0 : Math.PI;
       pv.shadow.position.set(p.x, 0.003, p.z);
       pv.character.update(this.pose(prev, curr, i, alpha), dt);
+      if (i === 1 && this.machineOn) this.placeMachine(p, end, pv, curr.tick + alpha);
 
       pv.ring.position.set(p.x, 0.006, p.z);
       pv.ring.visible = i === LOCAL_SIDE && player.commit !== null;
@@ -202,6 +219,15 @@ export class Renderer {
     this.camera.lookAt(this.cameraX, 0, v.lookAtZ);
 
     this.renderer.render(this.scene, this.camera);
+  }
+
+  /** The machine stands where Side 1's Player is, and squashes a little as it fires. */
+  private placeMachine(p: Vec3, end: End, pv: PlayerView, now: number) {
+    this.machine.position.set(p.x, 0, p.z);
+    this.machine.rotation.y = end === 0 ? 0 : Math.PI;
+    const since = pv.lastHit ? (now - pv.lastHit.tick) * TICK : Infinity;
+    const squash = since >= 0 ? 0.12 * Math.max(0, 1 - since / 0.2) : 0;
+    this.machine.scale.set(1 + squash * 0.5, 1 - squash, 1 + squash * 0.5);
   }
 
   /** Animation inputs for one Player, from the Sim and its predicted Contact. */

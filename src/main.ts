@@ -8,6 +8,7 @@ import { Input } from './input/input';
 import { Locker } from './menu/locker';
 import { CityMap } from './menu/map';
 import { Overlay, SettingsPanel } from './menu/menu';
+import { PRACTICE_STEPS, Practice, REPS_TO_PASS, createMachine } from './practice/practice';
 import { DEFAULT_PLAYER_COLORS, loadModels, loadSurroundings } from './render/models';
 import { Renderer } from './render/renderer';
 import { createReplay, type Replay } from './replay/replay';
@@ -25,7 +26,7 @@ const LOCAL = 0;
 
 // Flags for playtesting override the saved Settings: ?rally, ?bo3, ?bot=easy|medium|hard, ?sunset.
 // ?play skips the menu and starts a Match; ?venue=park|rooftop|beach picks its Venue, locked or not.
-// ?personality=dinker|banger|lobber overrides the Venue Bot's Personality.
+// ?personality=dinker|banger|lobber overrides the Venue Bot's Personality. ?practice starts Practice mode.
 const params = new URLSearchParams(location.search);
 const store = browserStore();
 let saved = loadSettings(store);
@@ -68,6 +69,7 @@ const menu = new Overlay(
   <div class="menu-body">
     <div class="menu-map"></div>
     <div class="menu-side">
+      <button id="open-practice" class="primary">Practice</button>
       <h2>Settings</h2>
       <button id="open-locker">Locker</button>
     </div>
@@ -83,6 +85,7 @@ menu.el.querySelector('#open-locker')!.before(
   }).el,
 );
 menu.on('#open-locker', () => setMode('locker'));
+menu.on('#open-practice', () => startPractice());
 
 const locker = new Locker(
   models.player,
@@ -104,7 +107,10 @@ const pause = new Overlay(
 pause.on('#resume', () => setMode('match'));
 pause.on('#quit', () => setMode('menu'));
 
+/** Side 1: the Venue's Bot, or the ball machine in Practice mode. */
 let bot: Bot;
+/** Practice mode's steps and reps, or null in a Match. */
+let practice: Practice | null = null;
 let prev: SimState;
 let curr: SimState;
 /** The Difficulty of the Match in play, for its star. */
@@ -129,8 +135,35 @@ function newMatch(seed: number) {
   bot = createBot(1, seed ^ 0x5eed, DIFFICULTY[s.difficulty], simTuning, personality);
   curr = prev = createInitialState(seed, { ...DEFAULT_MATCH, rallyScoring: s.rallyScoring, bestOf: s.bestOf });
   rally = { start: curr, intents: [] };
+  practice = null;
+  renderer.setMachine(false);
+  hud.setPractice(null);
   endReplay();
   hud.reset();
+}
+
+/** Practice mode at the Venue on show: the ball machine plays Side 1, and there is no score. */
+function startPractice() {
+  practice = new Practice();
+  const p = practice;
+  bot = createMachine(Date.now(), simTuning, () => p.step);
+  renderer.setMachine(true);
+  newRep();
+  endReplay();
+  hud.reset();
+  showPractice();
+  setMode('match');
+}
+
+/** Each rep is a fresh Rally, served by whoever the step says. */
+function newRep() {
+  curr = prev = createInitialState(Date.now() >>> 0, DEFAULT_MATCH, practice!.step.server);
+}
+
+function showPractice() {
+  const p = practice!;
+  const free = p.step.id === 'free';
+  hud.setPractice({ step: p.stepNumber, steps: PRACTICE_STEPS.length, title: p.step.title, prompt: p.step.prompt, reps: p.reps, needed: free ? 0 : REPS_TO_PASS });
 }
 
 async function playVenue(id: VenueId) {
@@ -166,7 +199,8 @@ function setMode(m: Mode) {
 }
 
 newMatch(Date.now());
-setMode(params.has('play') ? 'match' : 'menu');
+if (params.has('practice')) startPractice();
+else setMode(params.has('play') ? 'match' : 'menu');
 
 if (import.meta.env.DEV && params.has('debug')) {
   import('./debug/panel').then(({ createDebugPanel }) => createDebugPanel(simTuning, viewTuning, DIFFICULTY[settings().difficulty]));
@@ -192,6 +226,10 @@ if (import.meta.env.DEV && params.has('debug')) {
   eventLog,
   newMatch,
   playVenue,
+  startPractice,
+  get practice() {
+    return practice;
+  },
   get progress() {
     return progress;
   },
@@ -220,10 +258,19 @@ function tick(local: Intent = input.sample()) {
   const intents: [Intent, Intent] = [local, bot.think(observe(curr, 1))];
   prev = curr;
   curr = step(curr, intents, simTuning);
-  if (curr.phase === 'serve' && prev.phase !== 'serve') rally = { start: curr, intents: [] };
-  else rally.intents.push(intents);
+  if (curr.phase === 'serve' && prev.phase !== 'serve') {
+    if (practice) newRep();
+    rally = { start: curr, intents: [] };
+  } else rally.intents.push(intents);
 
-  hud.onEvents(curr, curr.events);
+  if (practice) {
+    // Practice judges each rep itself; the Match banners (a Bot "letting it bounce twice") would mislead.
+    const outcome = practice.onEvents(curr.events);
+    if (outcome) {
+      hud.banner(outcome.title, outcome.detail);
+      showPractice();
+    }
+  } else hud.onEvents(curr, curr.events);
   renderer.onEvents(curr, curr.events);
   playEvents(curr.events, endOf(curr, LOCAL), viewTuning);
   for (const e of curr.events) {

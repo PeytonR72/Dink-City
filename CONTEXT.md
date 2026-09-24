@@ -57,4 +57,5 @@ A browser-based 3D pickleball game. Singles against **Bots** in v1, with the mod
 
 - **Dink City**: the themed map menu.
 - **Venue**: a location on the map (e.g. Park, Rooftop, Beach). Each Venue has its own surroundings, ambience and Bot Personality. Venues unlock in order.
-- **Practice mode**: a ball machine that feeds shots through the same Intent interface.
+- **Practice mode**: a ball machine on Side 1 that feeds shots through the same Intent interface, with step-by-step prompts (return of serve, third shot, volley, dink, free play). Each **rep** is a fresh Rally with no score; three good reps pass a step.
+- **Fault Replay**: the last seconds before a Fault, re-stepped from the recorded Rally's start state and Intents, shown slowed under the Fault banner. Presentation only; it never feeds back into the Match.

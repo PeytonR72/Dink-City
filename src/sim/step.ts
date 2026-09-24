@@ -45,7 +45,8 @@ export function endOf(s: SimState, side: SideIndex): End {
   return s.match.ends[side];
 }
 
-export function createInitialState(seed: number, config: MatchConfig = DEFAULT_MATCH): SimState {
+/** A new Match. `server` serves first (Side 0 unless Practice mode says otherwise). */
+export function createInitialState(seed: number, config: MatchConfig = DEFAULT_MATCH, server: SideIndex = 0): SimState {
   const player = (): Player => ({
     pos: { x: 0, y: 0, z: 0 },
     vel: { x: 0, y: 0, z: 0 },
@@ -59,13 +60,13 @@ export function createInitialState(seed: number, config: MatchConfig = DEFAULT_M
     rng: seed >>> 0,
     phase: 'serve',
     phaseTick: 0,
-    server: 0,
+    server,
     match: {
       config: { ...config },
       points: [0, 0],
       games: [0, 0],
       ends: [0, 1],
-      gameFirstServer: 0,
+      gameFirstServer: server,
       winner: null,
     },
     shots: 0,

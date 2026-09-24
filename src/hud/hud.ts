@@ -15,6 +15,7 @@ export class Hud {
   private detail: HTMLElement;
   private shoutEl: HTMLElement;
   private replayTag: HTMLElement;
+  private practice: HTMLElement;
   /** A Replay is playing: the Fault banner stays up. */
   private replaying = false;
   private bannerTimer = 0;
@@ -32,7 +33,8 @@ export class Hud {
         <div id="games"></div>
       </div>
       <div id="banner"><div id="callout"></div><div id="detail"></div><div id="replay-tag">REPLAY · J / K / L to skip</div></div>
-      <div id="shout"></div>`,
+      <div id="shout"></div>
+      <div id="practice" hidden><div class="practice-step"></div><div class="practice-prompt"></div><div class="practice-reps"></div></div>`,
     );
     this.rows = [...root.querySelectorAll<HTMLElement>('#scoreboard .row')];
     this.games = root.querySelector('#games')!;
@@ -40,6 +42,7 @@ export class Hud {
     this.detail = root.querySelector('#detail')!;
     this.shoutEl = root.querySelector('#shout')!;
     this.replayTag = root.querySelector('#replay-tag')!;
+    this.practice = root.querySelector('#practice')!;
   }
 
   /** Local Player's row first. */
@@ -96,6 +99,21 @@ export class Hud {
     this.show('', '');
   }
 
+  /** Practice mode's panel (in place of the scoreboard), or null to hide it. */
+  setPractice(p: { step: number; steps: number; title: string; prompt: string; reps: number; needed: number } | null) {
+    this.practice.hidden = p === null;
+    document.body.dataset.practice = String(p !== null);
+    if (!p) return;
+    this.practice.querySelector('.practice-step')!.textContent = `Step ${p.step} of ${p.steps} · ${p.title}`;
+    this.practice.querySelector('.practice-prompt')!.textContent = p.prompt;
+    this.practice.querySelector('.practice-reps')!.textContent = p.needed > 0 ? '●'.repeat(p.reps) + '○'.repeat(p.needed - p.reps) : '';
+  }
+
+  /** Shows the banner for a few seconds (Practice mode's rep outcomes). */
+  banner(title: string, detail: string) {
+    this.show(title, detail, BANNER_SECONDS);
+  }
+
   private show(title: string, detail: string, seconds = 0) {
     this.callout.textContent = title;
     this.detail.textContent = detail;
@@ -104,7 +122,7 @@ export class Hud {
   }
 
   /** Pops a call-out; restarting the CSS animation lets back-to-back call-outs replay. */
-  private shout(text: string) {
+  shout(text: string) {
     this.shoutEl.textContent = text;
     this.shoutEl.classList.remove('pop');
     void this.shoutEl.offsetWidth;

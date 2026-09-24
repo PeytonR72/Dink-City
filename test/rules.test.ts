@@ -166,6 +166,16 @@ describe('Serve', () => {
     expect(serverLocalX(s)).toBeLessThan(0);
   });
 
+  it('can start with Side 1 serving (Practice mode)', () => {
+    const s = createInitialState(1, undefined, 1);
+    expect(s.server).toBe(1);
+    expect(s.match.gameFirstServer).toBe(1);
+    expect(serverLocalX(s)).toBeGreaterThan(0);
+    // The ball is held by the server.
+    const p = s.sides[1].players[0].pos;
+    expect(Math.hypot(s.ball.pos.x - p.x, s.ball.pos.z - p.z)).toBeLessThan(1);
+  });
+
   it('places the receiver diagonally opposite the server', () => {
     const s = createInitialState(1);
     const server = s.sides[0].players[0].pos;
