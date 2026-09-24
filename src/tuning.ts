@@ -1,0 +1,47 @@
+// Every feel constant lives here. `?debug` exposes these live (see src/debug/panel.ts);
+// use the panel's Export button and paste the result back into this file.
+import type { SimTuning } from './sim/types';
+
+export const simTuning: SimTuning = {
+  gravity: 9.81,
+  drag: 0.033,
+  magnus: 0.25,
+  restitution: 0.64,
+  bounceFriction: 0.78,
+  spinKick: 0.12,
+  substeps: 4,
+
+  playerSpeed: 5.5,
+  playerAccel: 35,
+  reach: 1.05,
+  reachHeight: 2.3,
+  assistRange: 0.9,
+  assistSpeed: 2.0,
+
+  deadTicks: 75,
+
+  shots: {
+    soft: { depth: 1.2, depthRange: 0.6, minDepth: 0.5, maxDepth: 2.0, apex: 1.2, apexPerMeter: 0.1, spin: -0.3, width: 2.2 },
+    drive: { depth: 5.2, depthRange: 1.0, minDepth: 3.5, maxDepth: 6.3, apex: 1.15, apexPerMeter: 0.02, spin: 0.6, width: 2.4 },
+    lob: { depth: 5.6, depthRange: 0.7, minDepth: 4.5, maxDepth: 6.3, apex: 5.0, apexPerMeter: 0.05, spin: 0.2, width: 2.2 },
+  },
+  serves: {
+    soft: { depth: 4.2, depthRange: 0.8, minDepth: 2.8, maxDepth: 6.0, apex: 2.4, apexPerMeter: 0, spin: 0.1, width: 1.2 },
+    drive: { depth: 5.8, depthRange: 0.5, minDepth: 4.0, maxDepth: 6.4, apex: 1.6, apexPerMeter: 0, spin: 0.4, width: 1.2 },
+  },
+};
+
+export const viewTuning = {
+  /** Global time factor. Scales real time into Sim Ticks; the Sim itself never sees it. */
+  gameSpeed: 1.0,
+  fov: 32,
+  cameraHeight: 12.5,
+  cameraDistance: 18,
+  lookAtZ: 0.6,
+  cameraFollowX: 0.25,
+  cameraDamping: 3,
+  ballScale: 2.2,
+  shadowMaxHeight: 5,
+};
+
+export type ViewTuning = typeof viewTuning;
