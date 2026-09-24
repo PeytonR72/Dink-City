@@ -60,7 +60,8 @@ export const PRACTICE_STEPS: PracticeStep[] = [
     server: 1,
     feeds: { 1: 'soft', 3: 'soft' },
     target: 4,
-    check: (shot) => (shot.variant === 'dink' ? null : 'Use Soft (J) from the Kitchen line for a dink.'),
+    check: (shot) =>
+      shot.volley ? 'Let it bounce first, then dink it.' : shot.variant === 'dink' ? null : 'Use Soft (J) from the Kitchen line for a dink.',
   },
   {
     id: 'free',

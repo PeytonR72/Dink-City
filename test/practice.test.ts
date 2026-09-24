@@ -86,6 +86,11 @@ describe('Practice steps', () => {
     const p = at(3);
     expect(p.onEvents([serve(1), hit(0), hit(1, { type: 'soft', variant: 'drop' }), hit(0, { type: 'soft', variant: 'dink' }), dead(1)])).toMatchObject({ kind: 'good' });
     expect(p.onEvents([serve(1), hit(0), hit(1), hit(0, { variant: 'drive' }), dead(1)])).toMatchObject({ kind: 'miss', detail: expect.stringMatching(/Soft/) });
+    // A dink volleyed from outside the Kitchen is legal, but not the skill: let it bounce.
+    expect(p.onEvents([serve(1), hit(0), hit(1), hit(0, { type: 'soft', variant: 'dink', volley: true }), dead(1)])).toMatchObject({
+      kind: 'miss',
+      detail: expect.stringMatching(/bounce/),
+    });
   });
 
   it('never ends free play', () => {

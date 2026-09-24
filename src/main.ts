@@ -131,7 +131,8 @@ function newMatch(seed: number) {
   const s = settings();
   difficulty = s.difficulty;
   viewTuning.sunset = s.sunset;
-  const personality = PERSONALITY[params.get('personality') as PersonalityName] ?? PERSONALITY[VENUES[venue].personality];
+  const flag = params.get('personality');
+  const personality = PERSONALITY[flag && Object.hasOwn(PERSONALITY, flag) ? (flag as PersonalityName) : VENUES[venue].personality];
   bot = createBot(1, seed ^ 0x5eed, DIFFICULTY[s.difficulty], simTuning, personality);
   curr = prev = createInitialState(seed, { ...DEFAULT_MATCH, rallyScoring: s.rallyScoring, bestOf: s.bestOf });
   rally = { start: curr, intents: [] };
@@ -174,6 +175,8 @@ async function playVenue(id: VenueId) {
 
 /** A Match won: a star for this Difficulty, and maybe the next Venue opens. */
 function onMatchWon() {
+  // A locked Venue played through ?venue= earns nothing.
+  if (!isUnlocked(progress, venue)) return;
   const before = VENUE_IDS.filter((id) => isUnlocked(progress, id));
   progress = recordWin(progress, venue, difficulty);
   saveProgress(store, progress);
@@ -277,8 +280,8 @@ function tick(local: Intent = input.sample()) {
     eventLog.push({ tick: curr.tick, ...e });
     if (e.kind === 'match' && e.winner === LOCAL) onMatchWon();
     if (e.kind === 'hit' && (e.variant === 'smash' || e.speed >= viewTuning.hitStopSpeed)) hitStop = viewTuning.hitStopMs / 1000;
-    // A double bounce is a winner, not a rule break, so it gets no Replay.
-    if (e.kind === 'dead' && e.reason !== 'double-bounce') {
+    // A double bounce is a winner, not a rule break, so it gets no Replay. In Practice only the Player's Faults do.
+    if (e.kind === 'dead' && e.reason !== 'double-bounce' && !(practice && e.loser !== LOCAL)) {
       replay = createReplay({ start: rally.start, intents: rally.intents.slice() }, simTuning, {
         seconds: viewTuning.replaySeconds,
         speed: viewTuning.replaySpeed,
@@ -301,7 +304,9 @@ function playReplay(dt: number): boolean {
   if (!replay) return false;
   if (replayIn > 0) {
     replayIn -= dt;
-    if (replayIn > 0) return false;
+    // The live Match plays on through the dead pause, but never into the next Serve.
+    if (replayIn > 0 && curr.phase === 'dead') return false;
+    replayIn = 0;
     hud.setReplay(true);
     renderer.cut();
   }
