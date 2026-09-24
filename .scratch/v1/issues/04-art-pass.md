@@ -40,3 +40,5 @@ Replace the graybox art with final-style models for one Venue (Park).
   - 1.1 MB first load: 655 KB JS (170 KB gzipped), 292 KB of models, 136 KB of ambience.
   - Frame rate was not measured on 2020 integrated graphics. Headless Chromium renders on the CPU, so it can't tell.
 - Camera (the handoff's open item): FOV 33, height 15.5, distance 20, lookAtZ 1.25 (was 32 / 12.5 / 18 / 0.6). A Player 2.5 m behind either baseline now stays in frame. The court is about 12% smaller on screen.
+
+**2026-09-24 (user):** Playtested; results clean.

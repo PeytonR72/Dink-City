@@ -36,3 +36,5 @@ All knobs live in `Difficulty` (easy, medium, hard) and in the `?debug` panel. H
   - The contact assist fixes most of an off-center setup during the Commit window (as it does for humans), so `offCenter` mostly weakens shots through the late Commit.
   - Unforced errors roughly double or triple a Bot's out/net rate but are mostly weak, attackable balls, because the Sim clamps the aim target inside the court. Real outright errors would need a Sim change (ADR-0002), which is the user's call.
 - Golden result re-pinned on purpose: 11–5 at tick 20188 (was 14–12 at tick 57041).
+
+**2026-09-24 (user):** Playtested; results clean.
