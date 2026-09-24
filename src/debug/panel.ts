@@ -1,9 +1,14 @@
 // `?debug` Tweakpane panel over the live tuning objects. Only loaded in dev builds.
 import { Pane } from 'tweakpane';
+import type { Difficulty } from '../bot/bot';
 import type { SimTuning } from '../sim';
 import type { ViewTuning } from '../tuning';
 
-export function createDebugPanel(sim: SimTuning, view: ViewTuning) {
+/**
+ * `bot` is the Difficulty preset the Bot in play reads (dev only: the sliders edit the preset itself).
+ * The per-ball rolls (late, off-center, Unforced error, discipline) take effect from the next ball; the rest at once.
+ */
+export function createDebugPanel(sim: SimTuning, view: ViewTuning, bot: Difficulty) {
   const pane = new Pane({ title: 'Tuning' });
 
   const v = pane.addFolder({ title: 'View' });
@@ -18,6 +23,18 @@ export function createDebugPanel(sim: SimTuning, view: ViewTuning) {
   v.addBinding(view, 'hitStopMs', { min: 0, max: 150, step: 5 });
   v.addBinding(view, 'hitStopSpeed', { min: 5, max: 30, step: 0.5 });
   v.addBinding(view, 'volume', { min: 0, max: 1, step: 0.05 });
+
+  const b = pane.addFolder({ title: 'Bot', expanded: false });
+  b.addBinding(bot, 'reactionTicks', { min: 0, max: 40, step: 1 });
+  b.addBinding(bot, 'moveSpeed', { min: 0.5, max: 1, step: 0.05 });
+  b.addBinding(bot, 'predictionError', { min: 0, max: 2, step: 0.05 });
+  b.addBinding(bot, 'aimWidth', { min: 0, max: 1, step: 0.05 });
+  b.addBinding(bot, 'aimNoise', { min: 0, max: 1, step: 0.05 });
+  b.addBinding(bot, 'lateCommit', { min: 0, max: 1, step: 0.05 });
+  b.addBinding(bot, 'offCenter', { min: 0, max: 1, step: 0.05 });
+  b.addBinding(bot, 'unforcedError', { min: 0, max: 0.5, step: 0.01 });
+  b.addBinding(bot, 'shotChoiceAccuracy', { min: 0, max: 1, step: 0.05 });
+  b.addBinding(bot, 'kitchenDiscipline', { min: 0, max: 1, step: 0.01 });
 
   const p = pane.addFolder({ title: 'Physics', expanded: false });
   p.addBinding(sim, 'gravity', { min: 5, max: 15 });

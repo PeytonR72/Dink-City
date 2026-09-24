@@ -49,7 +49,8 @@ A browser-based 3D pickleball game. Singles against **Bots** in v1, with the mod
 ### Bots
 
 - **Bot**: an AI Player that produces Intents from observed state. It has no special access to the Sim (see ADR-0003).
-- **Difficulty**: reaction delay, prediction error, aim noise, shot-choice accuracy, and kitchen discipline.
+- **Difficulty**: reaction delay, move speed, prediction error, aim width and noise, late and off-center hits, **Unforced errors**, shot-choice accuracy, and kitchen discipline. Bots are only ever handicapped through their Intents; the Sim treats them like humans.
+- **Unforced error**: a Bot going for too much on a ball it could have played safely: aimed at the lines, met off-center and committed at the last moment, so poor Shot quality sprays it.
 - **Personality**: weighting over Shot types, e.g. **Banger**, **Dinker**, **Lobber**.
 
 ### Meta

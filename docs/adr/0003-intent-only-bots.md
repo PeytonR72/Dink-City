@@ -10,7 +10,7 @@ Bots could either change Sim state directly or act through the same input path a
 
 A Bot is a function `(observedState, botMemory) → Intent`. It cannot write to Sim state, and it sees only what a player could see: ball position and velocity, and Player positions. Its prediction of the ball's path uses its own noisy estimate, not the Sim's exact trajectory.
 
-- **Difficulty** comes from reaction delay, prediction error, aim noise, shot-choice accuracy, and kitchen discipline.
+- **Difficulty** comes from reaction delay, prediction error, aim noise, shot-choice accuracy, and kitchen discipline. Since issue 07 it also includes move speed, aim width, late and off-center hits, and Unforced errors (see `CONTEXT.md`). All of them still act only through the Bot's Intents.
 - **Personality** is a weighting over Shot types and targets (Banger, Dinker, Lobber), set per Venue.
 - The Practice mode ball machine uses the same interface.
 

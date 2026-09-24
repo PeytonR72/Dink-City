@@ -26,10 +26,23 @@ import type { Observation } from './observe';
 export interface Difficulty {
   /** Ticks before the Bot reacts to a new shot. */
   reactionTicks: number;
+  /** 0–1: the Bot's top speed as a fraction of `playerSpeed`. Humans always get full speed. */
+  moveSpeed: number;
   /** Meters of error in the Bot's read of where the ball will be, one second out. Shrinks as the ball arrives. */
   predictionError: number;
+  /** 0–1: how close to the sideline the Bot aims, away from the opponent. It aims at 40–100% of this. */
+  aimWidth: number;
   /** Random spread added to Aim (Aim runs -1..1). */
   aimNoise: number;
+  /** 0–1: chance, per incoming ball, of committing late, which rushes the shot (ADR-0002). */
+  lateCommit: number;
+  /**
+   * 0–1: chance, per incoming ball, of setting up to the side and committing at the last moment. The contact
+   * assist fixes some of the footwork, so this weakens the shot mostly through the late Commit.
+   */
+  offCenter: number;
+  /** 0–1: chance, per incoming ball, of going for too much: an off-center, last-moment swing aimed at the lines. */
+  unforcedError: number;
   /** 0–1: chance of picking the best-weighted Shot type rather than a weighted guess. */
   shotChoiceAccuracy: number;
   /** 0–1: chance, per incoming ball, of respecting the Kitchen and Two-bounce rules. */
@@ -37,9 +50,42 @@ export interface Difficulty {
 }
 
 export const DIFFICULTY = {
-  easy: { reactionTicks: 18, predictionError: 0.9, aimNoise: 0.35, shotChoiceAccuracy: 0.4, kitchenDiscipline: 0.9 },
-  medium: { reactionTicks: 11, predictionError: 0.5, aimNoise: 0.2, shotChoiceAccuracy: 0.7, kitchenDiscipline: 0.97 },
-  hard: { reactionTicks: 6, predictionError: 0.2, aimNoise: 0.1, shotChoiceAccuracy: 0.9, kitchenDiscipline: 1 },
+  easy: {
+    reactionTicks: 24,
+    moveSpeed: 0.75,
+    predictionError: 0.9,
+    aimWidth: 0.4,
+    aimNoise: 0.45,
+    lateCommit: 0.5,
+    offCenter: 0.3,
+    unforcedError: 0.08,
+    shotChoiceAccuracy: 0.4,
+    kitchenDiscipline: 0.9,
+  },
+  medium: {
+    reactionTicks: 14,
+    moveSpeed: 0.9,
+    predictionError: 0.5,
+    aimWidth: 0.5,
+    aimNoise: 0.3,
+    lateCommit: 0.4,
+    offCenter: 0.2,
+    unforcedError: 0.08,
+    shotChoiceAccuracy: 0.7,
+    kitchenDiscipline: 0.97,
+  },
+  hard: {
+    reactionTicks: 8,
+    moveSpeed: 0.95,
+    predictionError: 0.2,
+    aimWidth: 0.85,
+    aimNoise: 0.15,
+    lateCommit: 0.1,
+    offCenter: 0.05,
+    unforcedError: 0.02,
+    shotChoiceAccuracy: 0.9,
+    kitchenDiscipline: 1,
+  },
 } satisfies Record<string, Difficulty>;
 
 /** A Personality is a weighting over Shot types (milestone 05 adds Banger, Dinker, Lobber). */
@@ -69,6 +115,14 @@ const PREDICT_TICKS = 150;
 const NET_GAP = 0.3;
 /** Commit to a volley when contact is this close. */
 const VOLLEY_COMMIT_TICKS = 60;
+/** A late Commit waits until the ball is this many Ticks from reach (picked per ball). */
+const LATE_COMMIT_TICKS = [5, 18] as const;
+/**
+ * An off-center setup: the ball passes this many meters to the backhand side of the sweet spot (the side
+ * with room before the edge of reach), and the Commit comes this many Ticks before the ball is in reach.
+ */
+const OFF_CENTER_X = [0.5, 0.8] as const;
+const OFF_CENTER_COMMIT_TICKS = 6;
 /** Before an early groundstroke Commit, the ball must stay this far beyond reach until it bounces. */
 const COMMIT_MARGIN = 0.2;
 /** How far from the net a disciplined Bot keeps its feet when volleying. */
@@ -106,6 +160,7 @@ export function createBot(
     return v;
   };
   const spread = () => random() * 2 - 1;
+  const uniform = ([lo, hi]: readonly [number, number]) => lo + random() * (hi - lo);
 
   // Per-ball memory, reset whenever a new shot is seen.
   let seenShots = -1;
@@ -113,6 +168,12 @@ export function createBot(
   let error = { x: 0, z: 0 };
   let disciplined = true;
   let leave = false;
+  /** Commit only when the ball is this many Ticks from reach, or null for the usual early Commit. */
+  let lateAt: number | null = null;
+  /** Meters (local x) the ball should pass to the side of the sweet spot on this ball: an off-center setup. */
+  let offCenterX = 0;
+  /** An Unforced error on this ball: going for too much, aimed at the lines. */
+  let unforced = false;
   /** Soft shots in a row this Rally. Bots lose patience in long dink exchanges. */
   let softStreak = 0;
   let aim: Vec2 = { x: 0, y: 0 };
@@ -147,6 +208,13 @@ export function createBot(
         error = { x: spread() * difficulty.predictionError, z: spread() * difficulty.predictionError };
         disciplined = random() < difficulty.kitchenDiscipline;
         leave = false;
+        // The mistakes a Difficulty allows, rolled once per ball.
+        // An Unforced error is also always off-center.
+        unforced = random() < difficulty.unforcedError;
+        const setUpOffCenter = unforced || random() < difficulty.offCenter;
+        lateAt = setUpOffCenter ? OFF_CENTER_COMMIT_TICKS : random() < difficulty.lateCommit ? uniform(LATE_COMMIT_TICKS) : null;
+        // Sideways only: along the ball's path, Contact just happens a little earlier or later.
+        offCenterX = setUpOffCenter ? -uniform(OFF_CENTER_X) : 0;
       }
 
       const incoming = o.ball.lastHitBy !== null && o.ball.lastHitBy !== side;
@@ -169,20 +237,23 @@ export function createBot(
       if (!plan) return moveTo(o, readySpot(o), null);
       shown.contact = plan.contact.pos;
 
+      // Moving the feet away from the ball puts the ball on the other side of the sweet spot.
+      const spot = { x: plan.spot.x - localToWorld(o.myEnd, offCenterX, 0).x, z: plan.spot.z };
       let shot: ShotType | null = null;
       const volley = plan.contact.bounces === 0;
       // Commit early for Shot quality, unless the ball passes close before it bounces (it could be volleyed by
       // accident). While the Two-bounce rule applies, a disciplined Bot allows for its own misread too.
       const mustBounce = o.shots < 3 && disciplined;
-      const early = clearUntilBounce(o, path, plan, COMMIT_MARGIN + (mustBounce ? difficulty.predictionError + 0.3 : 0));
-      const ready = volley ? plan.contact.tick <= VOLLEY_COMMIT_TICKS : o.ball.bouncesSinceHit >= 1 || early;
+      const early = clearUntilBounce(o, path, plan.contact.tick, spot, COMMIT_MARGIN + (mustBounce ? difficulty.predictionError + 0.3 : 0));
+      // A late Commit keeps the same safety check, it just waits longer.
+      const safe = volley ? plan.contact.tick <= VOLLEY_COMMIT_TICKS : o.ball.bouncesSinceHit >= 1 || early;
+      const ready = safe && (lateAt === null || ticksToReach(path, plan.contact.tick, [o.myPos, spot], mustBounce) <= lateAt);
       if (!o.committed && ready) {
         shot = chooseShot(o, plan);
         aim = chooseAim(o, shot);
         shown.shot = shot;
       }
       // Committed with the ball still in the air: any contact is a Volley, so stay behind the Kitchen line.
-      const spot = { ...plan.spot };
       const edge = kitchenEdge(t);
       if (disciplined && (o.committed || shot) && o.ball.bouncesSinceHit === 0 && Math.abs(spot.z) < edge) {
         spot.z = -facing(o.myEnd) * edge;
@@ -208,14 +279,29 @@ export function createBot(
   }
 
   /** The ball stays out of reach (and assist range) of both where I am and where I'm going until it bounces. */
-  function clearUntilBounce(o: Observation, path: PathPoint[], plan: Plan, margin: number): boolean {
+  function clearUntilBounce(o: Observation, path: PathPoint[], contactTick: number, spot: { x: number; z: number }, margin: number): boolean {
     const danger = t.reachForward + margin;
     for (const p of path) {
-      if (p.bounces > 0 || p.tick >= plan.contact.tick) break;
+      if (p.bounces > 0 || p.tick >= contactTick) break;
       if (p.pos.y > t.reachHeight + 0.5) continue;
-      for (const q of [o.myPos, plan.spot]) if (Math.hypot(p.pos.x - q.x, p.pos.z - q.z) < danger) return false;
+      for (const q of [o.myPos, spot]) if (Math.hypot(p.pos.x - q.x, p.pos.z - q.z) < danger) return false;
     }
     return true;
+  }
+
+  /**
+   * Ticks until the ball first comes within reach of any of `feet` (where the Bot is, and where it's going),
+   * or until the planned Contact if sooner. A late Commit counts down to this, not to Contact: off-center
+   * feet meet the ball early, and a Commit after that would be no swing at all.
+   */
+  function ticksToReach(path: PathPoint[], contactTick: number, feet: { x: number; z: number }[], mustBounce: boolean): number {
+    for (const p of path) {
+      if (p.tick >= contactTick) break;
+      if (mustBounce && p.bounces === 0) continue;
+      if (p.pos.y >= t.reachHeight) continue;
+      if (feet.some((q) => Math.hypot(p.pos.x - q.x, p.pos.z - q.z) < t.reachForward)) return p.tick;
+    }
+    return contactTick;
   }
 
   function spinOf(o: Observation): number {
@@ -243,7 +329,7 @@ export function createBot(
       if (volley && (mustBounce || !wantVolley)) continue;
       const spot = { x: p.pos.x - sweet.x, z: p.pos.z - sweet.z };
       if (volley && disciplined && Math.abs(spot.z) < kitchenEdge(t)) continue;
-      const need = Math.hypot(spot.x - o.myPos.x, spot.z - o.myPos.z) / t.playerSpeed + 0.12;
+      const need = Math.hypot(spot.x - o.myPos.x, spot.z - o.myPos.z) / (t.playerSpeed * difficulty.moveSpeed) + 0.12;
       const late = need - p.tick * TICK;
       if (late <= 0 && (volley || p.falling)) return { contact: p, spot };
       if (late <= 0) rising ??= { contact: p, spot };
@@ -273,7 +359,7 @@ export function createBot(
     const l = worldToLocal(o.myEnd, spot.x - o.myPos.x, spot.z - o.myPos.z);
     const d = Math.hypot(l.x, l.y);
     // Brake in time to stop on the spot (v² = 2ad, with some margin), so the Bot doesn't overshoot.
-    const speed = Math.min(1, Math.sqrt(2 * t.playerAccel * 0.7 * d) / t.playerSpeed);
+    const speed = Math.min(difficulty.moveSpeed, Math.sqrt(2 * t.playerAccel * 0.7 * d) / t.playerSpeed);
     const move = d < 0.03 ? { x: 0, y: 0 } : { x: (l.x / d) * speed, y: (l.y / d) * speed };
     return { move, aim, shot };
   }
@@ -329,7 +415,9 @@ export function createBot(
     // Both the opponent's x and the Aim's lateral are in my local frame.
     const theirLocalX = worldToLocal(o.myEnd, o.opponentPos.x, 0).x;
     const away = theirLocalX > 0 ? -1 : 1;
-    const x = away * (0.45 + 0.5 * random());
+    // Going for too much: the corner, as deep as the shot goes.
+    if (unforced) return { x: away, y: 1 };
+    const x = away * difficulty.aimWidth * (0.4 + 0.6 * random());
     const y = shot === 'soft' ? -0.2 + spread() * 0.4 : spread() * 0.5;
     return noisyAim(x, y);
   }

@@ -41,7 +41,7 @@ function newMatch(seed: number) {
 newMatch(Date.now());
 
 if (import.meta.env.DEV && params.has('debug')) {
-  import('./debug/panel').then(({ createDebugPanel }) => createDebugPanel(simTuning, viewTuning));
+  import('./debug/panel').then(({ createDebugPanel }) => createDebugPanel(simTuning, viewTuning, difficulty));
   import('./debug/overlays').then(({ createOverlays }) => createOverlays(renderer, simTuning, () => bot));
 }
 
