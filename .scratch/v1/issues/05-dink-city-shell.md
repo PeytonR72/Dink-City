@@ -29,3 +29,22 @@ The complete v1 meta-game around matches.
 - **Personality strength:** shot weights plus one or two fitting Difficulty tweaks, checked with Bot-vs-Bot stats.
 - **Practice mode:** the ball machine is Side 1, an Intent-only Side, with no scoring. Steps: 1) let the Serve bounce and return it, 2) let the third shot bounce before volleying, 3) volley from behind the Kitchen line, 4) dink from the Kitchen after a bounce, 5) free rally. Three good reps pass a step; a Fault shows why, with the Replay.
 - **Colors:** a locker panel with a live 3D preview and 8 swatches each for shirt, shorts, paddle, skin and hair. Each Venue's Bot has its own fixed look.
+
+### 2026-09-24: delivered (commits f994a1d, 36df94d, 62f5c8e, 928f4ee, ab0e840, 4694b83)
+
+All six Acceptance items are built. 142 Vitest tests and 11 Playwright checks pass (a budget check per Venue: Park 18k, Rooftop 28k, Beach 20k triangles, at most 40 draw calls). First load is about 1.1 MB, because the other Venues load lazily.
+
+- **Choices made without the user:**
+  - A double bounce (a winner) gets no Replay.
+  - The Replay starts 0.6 s after the Fault (`replayDelay`).
+  - Sunset is a saved Setting.
+  - Pause also opens on P and the gamepad's Start.
+  - New dev flags: `?play`, `?venue=`, `?personality=`, `?practice`.
+  - The Beach's sea is on one side only, so it appears on the other side of the screen after Ends switch.
+- **Still open for the user:**
+  - Personality strength against a neutral medium Bot is Dinker 57%, Lobber 46%, Banger 43%. So Bot-vs-Bot, the first Venue's Bot is the strongest.
+  - Menus can't be driven by a gamepad yet.
+- **Review smells left as they are:**
+  - `turned()` is duplicated in rooftop.py and beach.py.
+  - The rows of radio buttons are built twice (Settings and the locker).
+  - Adding a Venue touches `venues.ts`, `assets.ts`, `progress.ts` and the map's `PINS`.
