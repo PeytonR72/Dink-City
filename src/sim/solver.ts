@@ -1,6 +1,6 @@
 // Shot solver (ADR-0002): find a launch velocity that lands on a target with a
 // given apex, under the same drag/spin physics the Sim uses.
-import { BALL_RADIUS } from './court';
+import { BALL_RADIUS, netHeight } from './court';
 import { integrateBall } from './physics';
 import type { Ball, SimTuning, Vec3 } from './types';
 
@@ -49,6 +49,50 @@ function ballistic(from: Vec3, aim: { x: number; z: number }, apex: number, g: n
     y: vy,
     z: (aim.z - from.z) / flightTime,
   };
+}
+
+/** Drag-free launch velocity that reaches the aim point in the time `speed` implies. Allows downward launches. */
+function timed(from: Vec3, aim: { x: number; z: number }, speed: number, g: number): Vec3 {
+  const dx = aim.x - from.x;
+  const dz = aim.z - from.z;
+  const T = Math.max(Math.hypot(dx, dz) / speed, 0.15);
+  return { x: dx / T, y: (BALL_RADIUS - from.y + 0.5 * g * T * T) / T, z: dz / T };
+}
+
+/** Like solveShot, but fixes horizontal speed instead of apex. Used for Smashes. */
+export function solveTimedShot(
+  from: Vec3,
+  target: { x: number; z: number },
+  speed: number,
+  spin: number,
+  t: SimTuning,
+): Vec3 {
+  const aim = { ...target };
+  let vel = timed(from, aim, speed, t.gravity);
+  for (let i = 0; i < 12; i++) {
+    const flight = simulateFlight(from, vel, spin, t);
+    const ex = target.x - flight.landing.x;
+    const ez = target.z - flight.landing.z;
+    if (Math.hypot(ex, ez) < 0.01) break;
+    aim.x += ex;
+    aim.z += ez;
+    vel = timed(from, aim, speed, t.gravity);
+  }
+  return vel;
+}
+
+/** Height above the net tape where a flight crosses z = 0 (negative = into the net). */
+export function netClearance(flight: Flight): number {
+  for (let i = 1; i < flight.path.length; i++) {
+    const a = flight.path[i - 1];
+    const b = flight.path[i];
+    if (Math.sign(a.z) === Math.sign(b.z)) continue;
+    const k = a.z / (a.z - b.z);
+    const x = a.x + (b.x - a.x) * k;
+    const y = a.y + (b.y - a.y) * k;
+    return y - BALL_RADIUS - netHeight(x);
+  }
+  return Infinity;
 }
 
 export function solveShot(

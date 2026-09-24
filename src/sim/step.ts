@@ -6,10 +6,11 @@ import {
   isInBounds,
   localToWorld,
   sideOfZ,
+  worldToLocal,
 } from './court';
 import { integrateBall } from './physics';
 import { nextRandom } from './rng';
-import { TICK, solveShot } from './solver';
+import { TICK, netClearance, simulateFlight, solveShot, solveTimedShot } from './solver';
 import type {
   DeadReason,
   Intent,
@@ -19,6 +20,7 @@ import type {
   SideIndex,
   SimState,
   SimTuning,
+  Vec2,
   Vec3,
 } from './types';
 
@@ -32,6 +34,7 @@ export function createInitialState(seed: number): SimState {
     pos: { x: 0, y: 0, z: 0 },
     vel: { x: 0, y: 0, z: 0 },
     commit: null,
+    aiming: false,
     swing: null,
   });
   const s: SimState = {
@@ -96,7 +99,7 @@ function press(s: SimState, i: SideIndex, shot: ShotType, intent: Intent, t: Sim
     if (i === s.server && s.tick - s.phaseTick >= SERVE_DELAY_TICKS) serve(s, i, shot, intent, t);
     return;
   }
-  if (s.phase === 'rally') player.commit = { type: shot, tick: s.tick };
+  if (s.phase === 'rally') player.commit = { type: shot, tick: s.tick, bestDistance: null };
 }
 
 function serve(s: SimState, i: SideIndex, shot: ShotType, intent: Intent, t: SimTuning) {
@@ -110,7 +113,8 @@ function serve(s: SimState, i: SideIndex, shot: ShotType, intent: Intent, t: Sim
     x: clamp(diagonalX + lateral, -HALF_WIDTH + 0.15, HALF_WIDTH - 0.15),
     z: f * depthFor(tuning, intent.aim.y),
   };
-  launch(s, i, kind === 'drive' ? 'drive' : 'soft', target, tuning.apex, tuning.spin, t);
+  const vel = solveShot(s.ball.pos, target, tuning.apex, tuning.spin, t);
+  launch(s, i, kind, vel, tuning.spin);
   s.phase = 'rally';
   s.phaseTick = s.tick;
 }
@@ -119,43 +123,95 @@ function checkContact(s: SimState, intents: readonly [Intent, Intent], t: SimTun
   const { ball } = s;
   for (const i of [0, 1] as const) {
     const player = s.sides[i].players[0];
-    if (!player.commit || ball.lastHitBy === i || sideOfZ(ball.pos.z) !== i) continue;
-    if (ball.bouncesSinceHit > 1 || ball.pos.y > t.reachHeight) continue;
-    const d = Math.hypot(ball.pos.x - player.pos.x, ball.pos.z - player.pos.z);
-    if (d > t.reach) continue;
+    if (!player.commit) continue;
+    if (ball.lastHitBy === i || sideOfZ(ball.pos.z) !== i || ball.bouncesSinceHit > 1) {
+      player.commit.bestDistance = null;
+      continue;
+    }
+    const d = sweetSpotDistance(player, i, ball.pos, t);
+    if (d === null) continue;
 
-    const type = player.commit.type;
-    const tuning = t.shots[type];
-    const aim = intents[i].aim;
-    const lateral = localToWorld(i, clamp(aim.x, -1, 1) * tuning.width, 0).x;
-    const target = {
-      x: clamp(lateral, -HALF_WIDTH + 0.15, HALF_WIDTH - 0.15),
-      z: facing(i) * depthFor(tuning, aim.y),
-    };
-    const apex = tuning.apex + tuning.apexPerMeter * Math.abs(ball.pos.z);
-    launch(s, i, type, target, apex, tuning.spin, t);
+    // Wait for the ball to reach its closest point to the sweet spot, but
+    // never let it leave reach unhit.
+    const next = { x: ball.pos.x + ball.vel.x * TICK, y: ball.pos.y + ball.vel.y * TICK, z: ball.pos.z + ball.vel.z * TICK };
+    const leaving = sweetSpotDistance(player, i, next, t) === null;
+    const best = player.commit.bestDistance;
+    if (d > t.sweetRadius && !leaving && (best === null || d < best)) {
+      player.commit.bestDistance = d;
+      continue;
+    }
+
+    hit(s, i, player.commit.type, qualityAt(d, t), intents[i].aim, t);
     return;
   }
+}
+
+/**
+ * Normalized distance (0 = sweet spot, 1 = edge of reach) from the Player's
+ * sweet spot to a ball position, or null when out of reach.
+ */
+function sweetSpotDistance(player: Player, i: SideIndex, pos: Vec3, t: SimTuning): number | null {
+  if (pos.y > t.reachHeight) return null;
+  const l = worldToLocal(i, pos.x - player.pos.x, pos.z - player.pos.z);
+  if (Math.hypot(l.x / t.reachSide, l.y / (l.y >= 0 ? t.reachForward : t.reachBack)) > 1) return null;
+  const dx = (l.x - t.sweetSpotSide) / t.reachSide;
+  const dy =
+    l.y >= t.sweetSpotForward
+      ? (l.y - t.sweetSpotForward) / (t.reachForward - t.sweetSpotForward)
+      : (t.sweetSpotForward - l.y) / (t.sweetSpotForward + t.reachBack);
+  return Math.min(1, Math.hypot(dx, dy));
+}
+
+function qualityAt(distance: number, t: SimTuning): number {
+  if (distance <= t.sweetRadius) return 1;
+  const k = (distance - t.sweetRadius) / (1 - t.sweetRadius);
+  return 1 + (t.edgeQuality - 1) * k;
+}
+
+function hit(s: SimState, i: SideIndex, type: ShotType, quality: number, aim: Vec2, t: SimTuning) {
+  const { ball } = s;
+  const tuning = t.shots[type];
+  const weak = 1 - quality;
+  const lateral = localToWorld(i, clamp(aim.x, -1, 1) * tuning.width, 0).x;
+  const depth = Math.max(0.5, depthFor(tuning, aim.y) - weak * tuning.weakDepth);
+  const target = { x: clamp(lateral, -HALF_WIDTH + 0.15, HALF_WIDTH - 0.15), z: facing(i) * depth };
+
+  let smash = false;
+  let vel: Vec3 | null = null;
+  if (type === 'drive' && ball.pos.y >= t.smashHeight) {
+    const speed = t.smashSpeed * (0.6 + 0.4 * quality);
+    const v = solveTimedShot(ball.pos, target, speed, tuning.spin, t);
+    // A smash from too deep would go into the net; fall back to a normal Drive.
+    if (netClearance(simulateFlight(ball.pos, v, tuning.spin, t)) > 0.05) {
+      vel = v;
+      smash = true;
+    }
+  }
+  if (!vel) {
+    const apex = tuning.apex + tuning.apexPerMeter * Math.abs(ball.pos.z) + weak * tuning.weakApex;
+    vel = solveShot(ball.pos, target, apex, tuning.spin, t);
+  }
+  launch(s, i, type, vel, tuning.spin, { smash, quality });
 }
 
 function launch(
   s: SimState,
   i: SideIndex,
   type: ShotType,
-  target: { x: number; z: number },
-  apex: number,
+  vel: Vec3,
   spin: number,
-  t: SimTuning,
+  info: { smash: boolean; quality: number } = { smash: false, quality: 1 },
 ) {
   const { ball } = s;
   const player = s.sides[i].players[0];
-  ball.vel = solveShot(ball.pos, target, apex, spin, t);
+  ball.vel = vel;
   ball.spin = spin;
   ball.lastHitBy = i;
   ball.bouncesSinceHit = 0;
   player.commit = null;
+  player.aiming = false;
   player.swing = { type, tick: s.tick };
-  s.events.push({ kind: 'hit', side: i, type, pos: { ...ball.pos }, speed: length(ball.vel) });
+  s.events.push({ kind: 'hit', side: i, type, ...info, pos: { ...ball.pos }, speed: length(ball.vel) });
 }
 
 function onBounce(s: SimState, pos: Vec3) {
@@ -194,20 +250,32 @@ function movePlayer(s: SimState, i: SideIndex, intent: Intent, t: SimTuning) {
   const serving = s.phase === 'serve' && i === s.server;
   if (serving) want.z = 0;
 
+  // Close to a committed ball, the assist takes over footwork and move input only aims.
+  const { ball } = s;
+  const incoming = player.commit !== null && s.phase === 'rally' && ball.lastHitBy !== i;
+  const ballDistance = Math.hypot(ball.pos.x - player.pos.x, ball.pos.z - player.pos.z);
+  player.aiming = incoming && ballDistance < t.reachForward + t.assistRange && ball.pos.y < t.reachHeight + 0.5;
+  if (player.aiming) {
+    want.x = 0;
+    want.z = 0;
+  }
+
   const maxDelta = t.playerAccel * TICK;
   player.vel.x += clamp(want.x - player.vel.x, -maxDelta, maxDelta);
   player.vel.z += clamp(want.z - player.vel.z, -maxDelta, maxDelta);
 
+  // The assist steers so the ball passes through the sweet spot.
   let assistX = 0;
   let assistZ = 0;
-  const { ball } = s;
-  if (player.commit && s.phase === 'rally' && ball.lastHitBy !== i) {
-    const dx = ball.pos.x - player.pos.x;
-    const dz = ball.pos.z - player.pos.z;
+  if (player.aiming) {
+    const sweet = localToWorld(i, t.sweetSpotSide, t.sweetSpotForward);
+    const dx = ball.pos.x - sweet.x - player.pos.x;
+    const dz = ball.pos.z - sweet.z - player.pos.z;
     const d = Math.hypot(dx, dz);
-    if (d > t.reach * 0.6 && d < t.reach + t.assistRange) {
-      assistX = (dx / d) * t.assistSpeed;
-      assistZ = (dz / d) * t.assistSpeed;
+    if (d > 0.02) {
+      const speed = Math.min(t.assistSpeed, d / TICK);
+      assistX = (dx / d) * speed;
+      assistZ = (dz / d) * speed;
     }
   }
 
@@ -248,6 +316,7 @@ function place(p: Player, side: SideIndex, x: number) {
   p.pos = { x, y: 0, z: -facing(side) * (HALF_LENGTH + BASELINE_OFFSET) };
   p.vel = { x: 0, y: 0, z: 0 };
   p.commit = null;
+  p.aiming = false;
 }
 
 function holdBall(s: SimState) {

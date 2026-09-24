@@ -29,6 +29,8 @@ export interface Intent {
 export interface Commit {
   type: ShotType;
   tick: number;
+  /** Closest sweet-spot distance seen so far while the ball is in reach. */
+  bestDistance: number | null;
 }
 
 export interface Swing {
@@ -41,6 +43,11 @@ export interface Player {
   pos: Vec3;
   vel: Vec3;
   commit: Commit | null;
+  /**
+   * Committed and the ball is close: the contact assist owns footwork and
+   * move input only aims.
+   */
+  aiming: boolean;
   /** Most recent swing, for animation. */
   swing: Swing | null;
 }
@@ -64,7 +71,7 @@ export type Phase = 'serve' | 'rally' | 'dead';
 export type DeadReason = 'out' | 'double-bounce' | 'net' | 'gone';
 
 export type SimEvent =
-  | { kind: 'hit'; side: SideIndex; type: ShotType; pos: Vec3; speed: number }
+  | { kind: 'hit'; side: SideIndex; type: ShotType; smash: boolean; quality: number; pos: Vec3; speed: number }
   | { kind: 'bounce'; pos: Vec3; speed: number }
   | { kind: 'net'; pos: Vec3; cord: boolean }
   | { kind: 'dead'; reason: DeadReason };
@@ -99,12 +106,28 @@ export interface SimTuning {
 
   playerSpeed: number;
   playerAccel: number;
-  /** Horizontal reach radius from the Player's center. */
-  reach: number;
+  /**
+   * Reach is an oval in the Player's local frame: long in front, shorter to
+   * the sides, short behind.
+   */
+  reachForward: number;
+  reachSide: number;
+  reachBack: number;
   reachHeight: number;
-  /** Extra range beyond reach where the contact assist pulls the Player in. */
+  /** Where in the reach oval the sweet spot sits (local right, forward). */
+  sweetSpotSide: number;
+  sweetSpotForward: number;
+  /** Fraction of the oval (from the sweet spot) that still gives full quality. */
+  sweetRadius: number;
+  /** Quality at the very edge of reach. */
+  edgeQuality: number;
+  /** Extra range beyond reach where the contact assist pulls the Player in, and move input switches to aim. */
   assistRange: number;
   assistSpeed: number;
+
+  /** Drive contact at or above this height becomes a Smash. */
+  smashHeight: number;
+  smashSpeed: number;
 
   deadTicks: number;
 
@@ -126,4 +149,8 @@ export interface ShotTuning {
   spin: number;
   /** Lateral target at full left/right Aim. */
   width: number;
+  /** At zero quality: extra apex (a loopier, slower ball)... */
+  weakApex: number;
+  /** ...and this much shorter. */
+  weakDepth: number;
 }

@@ -72,6 +72,56 @@ describe('shot solver', () => {
   }
 });
 
+describe('contact', () => {
+  /** Side 0 Player at (0, 4) facing -z, Side 1 just hit the ball. Local forward = -z, right = +x. */
+  function rallyWithBall(pos: { x: number; y: number; z: number }, vel = { x: 0, y: 0, z: 0 }): SimState {
+    const s = structuredClone(createInitialState(3));
+    s.phase = 'rally';
+    s.sides[0].players[0].pos = { x: 0, y: 0, z: 4 };
+    s.ball = { pos, vel, spin: 0, lastHitBy: 1, bouncesSinceHit: 1 };
+    return s;
+  }
+  const commitDrive: Intent = { ...idle, shot: 'drive' };
+  const hitIn = (s: SimState, ticks = 1) => {
+    s = step(s, [commitDrive, idle], t);
+    for (let i = 0; i < ticks; i++) {
+      const hit = s.events.find((e) => e.kind === 'hit');
+      if (hit?.kind === 'hit') return hit;
+      s = step(s, [idle, idle], t);
+    }
+    return undefined;
+  };
+
+  it('does not reach a ball behind the Player', () => {
+    expect(hitIn(rallyWithBall({ x: 0, y: 0.9, z: 4.6 }, { x: 0, y: 0, z: 3 }), 10)).toBeUndefined();
+  });
+
+  it('does not reach a ball far to the side', () => {
+    expect(hitIn(rallyWithBall({ x: 1.1, y: 0.9, z: 3.8 }, { x: 3, y: 0, z: 0 }), 10)).toBeUndefined();
+  });
+
+  it('hits a sweet-spot ball at full quality', () => {
+    const hit = hitIn(rallyWithBall({ x: 0.2, y: 0.9, z: 3.55 }));
+    expect(hit?.quality).toBe(1);
+  });
+
+  it('hits a stretched ball weaker than a sweet-spot ball', () => {
+    const sweet = hitIn(rallyWithBall({ x: 0.2, y: 0.9, z: 3.55 }));
+    // Out at the forehand edge and moving away: must be hit now or never.
+    const stretched = hitIn(rallyWithBall({ x: 0.85, y: 0.9, z: 3.8 }, { x: 4, y: 0, z: 0 }));
+    expect(stretched).toBeDefined();
+    expect(stretched!.quality).toBeLessThan(0.7);
+    expect(stretched!.speed).toBeLessThan(sweet!.speed);
+  });
+
+  it('turns a Drive on a high ball into a faster Smash', () => {
+    const drive = hitIn(rallyWithBall({ x: 0.2, y: 0.9, z: 3.55 }));
+    const smash = hitIn(rallyWithBall({ x: 0.2, y: 2.0, z: 3.55 }));
+    expect(smash?.smash).toBe(true);
+    expect(smash!.speed).toBeGreaterThan(drive!.speed * 1.15);
+  });
+});
+
 describe('step', () => {
   it('is pure and deterministic', () => {
     const s0 = createInitialState(42);

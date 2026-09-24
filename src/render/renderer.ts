@@ -27,6 +27,7 @@ const COLORS = {
   post: 0x2b2b2b,
   ball: 0xf4e04d,
   shadow: 0x000000,
+  aim: 0xffd23f,
   sides: [0xff7a3d, 0x8a5cf6],
 };
 
@@ -36,6 +37,8 @@ interface PlayerView {
   root: THREE.Group;
   arm: THREE.Group;
   shadow: THREE.Mesh;
+  /** Faint when committed, bright once the move input switches to aim. */
+  ring: THREE.Mesh;
 }
 
 export class Renderer {
@@ -95,7 +98,13 @@ export class Renderer {
       const pv = this.players[i];
       pv.root.position.set(p.x, 0, p.z);
       pv.shadow.position.set(p.x, 0.003, p.z);
-      pv.arm.rotation.y = swingAngle(curr.sides[i].players[0], curr.tick + alpha);
+      const player = curr.sides[i].players[0];
+      pv.arm.rotation.y = swingAngle(player, curr.tick + alpha);
+      pv.ring.position.set(p.x, 0.006, p.z);
+      pv.ring.visible = i === 0 && player.commit !== null;
+      const ringMat = pv.ring.material as THREE.MeshBasicMaterial;
+      ringMat.color.setHex(player.aiming ? COLORS.aim : COLORS.line);
+      ringMat.opacity = player.aiming ? 0.95 : 0.4;
     }
 
     const local = curr.sides[0].players[0].pos;
@@ -195,8 +204,13 @@ export class Renderer {
     root.add(arm);
 
     const shadow = blobShadow(0.38);
-    this.scene.add(root, shadow);
-    return { root, arm, shadow };
+    const ring = new THREE.Mesh(
+      new THREE.RingGeometry(0.55, 0.66, 32),
+      new THREE.MeshBasicMaterial({ color: COLORS.line, transparent: true, depthWrite: false }),
+    );
+    ring.rotation.x = -Math.PI / 2;
+    this.scene.add(root, shadow, ring);
+    return { root, arm, shadow, ring };
   }
 }
 

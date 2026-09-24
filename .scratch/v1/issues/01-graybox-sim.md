@@ -29,3 +29,10 @@ A box Player on a real-size court can hit a ball back and forth against a wall o
 - Dev hook for playtests: `window.dink.advance(ticks, drive?)` steps the loop synchronously (rAF pauses in hidden tabs).
 - Not verified: gamepad (no device available). Playwright MCP is configured but needs a Claude Code restart to load, so Claude-in-Chrome was used for playtesting.
 - Serve rotation is a placeholder (alternates every point). Real scoring and Faults are issue 02.
+
+**2026-09-23 (Claude), playtest feedback round 1:**
+- Movement: feels right.
+- Reach was too generous to the sides and behind. It's now an oval in the Player's local frame (1.1 m forward, 0.9 m side, 0.35 m back).
+- Drive against a high ball (≥ 1.5 m) now becomes a Smash (~47 mph vs ~33 mph for a clean drive).
+- Positional contact quality (a preview of 03): contact waits for the ball's closest point to the sweet spot. A stretched drive is loopier and shorter (~26 mph).
+- Aim was hard because the same input moved the Player and aimed. Now, once committed and the ball is close, the assist owns footwork and move input only aims. A ring under the Player shows commit (faint) and aim mode (yellow).

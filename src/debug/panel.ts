@@ -26,10 +26,18 @@ export function createDebugPanel(sim: SimTuning, view: ViewTuning) {
   const pl = pane.addFolder({ title: 'Player', expanded: false });
   pl.addBinding(sim, 'playerSpeed', { min: 2, max: 10 });
   pl.addBinding(sim, 'playerAccel', { min: 5, max: 80 });
-  pl.addBinding(sim, 'reach', { min: 0.5, max: 2 });
+  pl.addBinding(sim, 'reachForward', { min: 0.3, max: 2 });
+  pl.addBinding(sim, 'reachSide', { min: 0.3, max: 2 });
+  pl.addBinding(sim, 'reachBack', { min: 0, max: 1.5 });
   pl.addBinding(sim, 'reachHeight', { min: 1.5, max: 3 });
+  pl.addBinding(sim, 'sweetSpotSide', { min: -0.8, max: 0.8 });
+  pl.addBinding(sim, 'sweetSpotForward', { min: 0, max: 1.2 });
+  pl.addBinding(sim, 'sweetRadius', { min: 0, max: 1 });
+  pl.addBinding(sim, 'edgeQuality', { min: 0, max: 1 });
   pl.addBinding(sim, 'assistRange', { min: 0, max: 2 });
-  pl.addBinding(sim, 'assistSpeed', { min: 0, max: 5 });
+  pl.addBinding(sim, 'assistSpeed', { min: 0, max: 6 });
+  pl.addBinding(sim, 'smashHeight', { min: 1, max: 2.5 });
+  pl.addBinding(sim, 'smashSpeed', { min: 10, max: 35 });
 
   const shots = pane.addFolder({ title: 'Shots', expanded: false });
   for (const [name, s] of [...Object.entries(sim.shots), ...Object.entries(sim.serves).map(([k, v]) => [`serve ${k}`, v] as const)]) {
@@ -40,6 +48,8 @@ export function createDebugPanel(sim: SimTuning, view: ViewTuning) {
     f.addBinding(s, 'apexPerMeter', { min: 0, max: 0.5 });
     f.addBinding(s, 'spin', { min: -1, max: 1 });
     f.addBinding(s, 'width', { min: 0, max: 3 });
+    f.addBinding(s, 'weakApex', { min: 0, max: 2 });
+    f.addBinding(s, 'weakDepth', { min: 0, max: 3 });
   }
 
   pane.addButton({ title: 'Export to console + clipboard' }).on('click', () => {

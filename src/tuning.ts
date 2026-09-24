@@ -13,21 +13,30 @@ export const simTuning: SimTuning = {
 
   playerSpeed: 5.5,
   playerAccel: 35,
-  reach: 1.05,
+  reachForward: 1.1,
+  reachSide: 0.9,
+  reachBack: 0.35,
   reachHeight: 2.3,
+  sweetSpotSide: 0.2,
+  sweetSpotForward: 0.45,
+  sweetRadius: 0.45,
+  edgeQuality: 0.3,
   assistRange: 0.9,
-  assistSpeed: 2.0,
+  assistSpeed: 2.5,
+
+  smashHeight: 1.5,
+  smashSpeed: 21,
 
   deadTicks: 75,
 
   shots: {
-    soft: { depth: 1.2, depthRange: 0.6, minDepth: 0.5, maxDepth: 2.0, apex: 1.2, apexPerMeter: 0.1, spin: -0.3, width: 2.2 },
-    drive: { depth: 5.2, depthRange: 1.0, minDepth: 3.5, maxDepth: 6.3, apex: 1.15, apexPerMeter: 0.02, spin: 0.6, width: 2.4 },
-    lob: { depth: 5.6, depthRange: 0.7, minDepth: 4.5, maxDepth: 6.3, apex: 5.0, apexPerMeter: 0.05, spin: 0.2, width: 2.2 },
+    soft: { depth: 1.2, depthRange: 0.6, minDepth: 0.5, maxDepth: 2.0, apex: 1.2, apexPerMeter: 0.1, spin: -0.3, width: 2.2, weakApex: 0.3, weakDepth: 0 },
+    drive: { depth: 5.2, depthRange: 1.0, minDepth: 3.5, maxDepth: 6.3, apex: 1.15, apexPerMeter: 0.02, spin: 0.6, width: 2.4, weakApex: 0.9, weakDepth: 1.5 },
+    lob: { depth: 5.6, depthRange: 0.7, minDepth: 4.5, maxDepth: 6.3, apex: 5.0, apexPerMeter: 0.05, spin: 0.2, width: 2.2, weakApex: 0, weakDepth: 0.8 },
   },
   serves: {
-    soft: { depth: 4.2, depthRange: 0.8, minDepth: 2.8, maxDepth: 6.0, apex: 2.4, apexPerMeter: 0, spin: 0.1, width: 1.2 },
-    drive: { depth: 5.8, depthRange: 0.5, minDepth: 4.0, maxDepth: 6.4, apex: 1.6, apexPerMeter: 0, spin: 0.4, width: 1.2 },
+    soft: { depth: 4.2, depthRange: 0.8, minDepth: 2.8, maxDepth: 6.0, apex: 2.4, apexPerMeter: 0, spin: 0.1, width: 1.2, weakApex: 0, weakDepth: 0 },
+    drive: { depth: 5.8, depthRange: 0.5, minDepth: 4.0, maxDepth: 6.4, apex: 1.6, apexPerMeter: 0, spin: 0.4, width: 1.2, weakApex: 0, weakDepth: 0 },
   },
 };
 
