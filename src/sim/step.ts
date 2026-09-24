@@ -1,11 +1,13 @@
 import {
   BALL_RADIUS,
+  CENTERLINE_HALF,
   HALF_LENGTH,
   HALF_WIDTH,
+  KITCHEN_DEPTH,
+  endOfZ,
   facing,
   isInBounds,
   localToWorld,
-  sideOfZ,
   worldToLocal,
 } from './court';
 import { integrateBall } from './physics';
@@ -13,6 +15,9 @@ import { nextRandom } from './rng';
 import { TICK, netClearance, simulateFlight, solveShot, solveTimedShot } from './solver';
 import type {
   DeadReason,
+  End,
+  Match,
+  MatchConfig,
   Intent,
   Player,
   ShotTuning,
@@ -29,7 +34,14 @@ const SERVE_X = 1.52;
 const BASELINE_OFFSET = 0.3;
 const FAR = 10;
 
-export function createInitialState(seed: number): SimState {
+export const DEFAULT_MATCH: MatchConfig = { pointsToWin: 11, winBy: 2, rallyScoring: false, bestOf: 1 };
+
+/** The End a Side is playing from in the current Game. */
+export function endOf(s: SimState, side: SideIndex): End {
+  return s.match.ends[side];
+}
+
+export function createInitialState(seed: number, config: MatchConfig = DEFAULT_MATCH): SimState {
   const player = (): Player => ({
     pos: { x: 0, y: 0, z: 0 },
     vel: { x: 0, y: 0, z: 0 },
@@ -43,7 +55,15 @@ export function createInitialState(seed: number): SimState {
     phase: 'serve',
     phaseTick: 0,
     server: 0,
-    serveCount: 0,
+    match: {
+      config: { ...config },
+      points: [0, 0],
+      games: [0, 0],
+      ends: [0, 1],
+      gameFirstServer: 0,
+      winner: null,
+    },
+    shots: 0,
     ball: { pos: { x: 0, y: 0, z: 0 }, vel: { x: 0, y: 0, z: 0 }, spin: 0, lastHitBy: null, bouncesSinceHit: 0 },
     sides: [{ players: [player()] }, { players: [player()] }],
     events: [],
@@ -84,9 +104,13 @@ export function step(prev: SimState, intents: readonly [Intent, Intent], t: SimT
     }
     if (s.phase === 'rally') checkRolling(s);
     if (s.phase === 'rally') checkContact(s, intents, t);
-  } else if (s.tick - s.phaseTick >= t.deadTicks) {
-    s.serveCount++;
-    s.server = (s.serveCount % 2) as SideIndex;
+  } else if (s.phase === 'dead' && s.tick - s.phaseTick >= t.deadTicks) {
+    if (s.match.winner !== null) {
+      s.phase = 'over';
+      s.phaseTick = s.tick;
+      return s;
+    }
+    if (gameWinner(s.match) !== null) startNextGame(s);
     setUpServe(s);
   }
 
@@ -105,10 +129,10 @@ function press(s: SimState, i: SideIndex, shot: ShotType, intent: Intent, t: Sim
 function serve(s: SimState, i: SideIndex, shot: ShotType, intent: Intent, t: SimTuning) {
   const kind = shot === 'drive' ? 'drive' : 'soft';
   const tuning = t.serves[kind];
-  const player = s.sides[i].players[0];
-  const f = facing(i);
-  const diagonalX = -Math.sign(player.pos.x) * SERVE_X;
-  const lateral = localToWorld(i, clamp(intent.aim.x, -1, 1) * tuning.width, 0).x;
+  const end = endOf(s, i);
+  const f = facing(end);
+  const diagonalX = serviceCourtSign(s) * SERVE_X;
+  const lateral = localToWorld(end, clamp(intent.aim.x, -1, 1) * tuning.width, 0).x;
   const target = {
     x: clamp(diagonalX + lateral, -HALF_WIDTH + 0.15, HALF_WIDTH - 0.15),
     z: f * depthFor(tuning, intent.aim.y),
@@ -124,35 +148,46 @@ function checkContact(s: SimState, intents: readonly [Intent, Intent], t: SimTun
   for (const i of [0, 1] as const) {
     const player = s.sides[i].players[0];
     if (!player.commit) continue;
-    if (ball.lastHitBy === i || sideOfZ(ball.pos.z) !== i || ball.bouncesSinceHit > 1) {
+    const end = endOf(s, i);
+    if (ball.lastHitBy === i || endOfZ(ball.pos.z) !== end || ball.bouncesSinceHit > 1) {
       player.commit.bestDistance = null;
       continue;
     }
-    const d = sweetSpotDistance(player, i, ball.pos, t);
+    const d = sweetSpotDistance(player, end, ball.pos, t);
     if (d === null) continue;
 
     // Wait for the ball to reach its closest point to the sweet spot, but
     // never let it leave reach unhit.
     const next = { x: ball.pos.x + ball.vel.x * TICK, y: ball.pos.y + ball.vel.y * TICK, z: ball.pos.z + ball.vel.z * TICK };
-    const leaving = sweetSpotDistance(player, i, next, t) === null;
+    const leaving = sweetSpotDistance(player, end, next, t) === null;
     const best = player.commit.bestDistance;
     if (d > t.sweetRadius && !leaving && (best === null || d < best)) {
       player.commit.bestDistance = d;
       continue;
     }
 
+    const volley = ball.bouncesSinceHit === 0;
+    // The Serve and the return of serve must both bounce (Two-bounce rule).
+    const mustBounce = s.shots < 3;
     hit(s, i, player.commit.type, qualityAt(d, t), intents[i].aim, t);
+    if (volley && mustBounce) die(s, 'two-bounce', i);
+    else if (volley && inKitchen(player, t)) die(s, 'kitchen', i);
     return;
   }
+}
+
+/** A Player is a point with a foot radius; touching the Kitchen line counts as in the Kitchen. */
+function inKitchen(player: Player, t: SimTuning): boolean {
+  return Math.abs(player.pos.z) < KITCHEN_DEPTH + t.footRadius;
 }
 
 /**
  * Normalized distance (0 = sweet spot, 1 = edge of reach) from the Player's
  * sweet spot to a ball position, or null when out of reach.
  */
-function sweetSpotDistance(player: Player, i: SideIndex, pos: Vec3, t: SimTuning): number | null {
+function sweetSpotDistance(player: Player, end: End, pos: Vec3, t: SimTuning): number | null {
   if (pos.y > t.reachHeight) return null;
-  const l = worldToLocal(i, pos.x - player.pos.x, pos.z - player.pos.z);
+  const l = worldToLocal(end, pos.x - player.pos.x, pos.z - player.pos.z);
   if (Math.hypot(l.x / t.reachSide, l.y / (l.y >= 0 ? t.reachForward : t.reachBack)) > 1) return null;
   const dx = (l.x - t.sweetSpotSide) / t.reachSide;
   const dy =
@@ -172,9 +207,10 @@ function hit(s: SimState, i: SideIndex, type: ShotType, quality: number, aim: Ve
   const { ball } = s;
   const tuning = t.shots[type];
   const weak = 1 - quality;
-  const lateral = localToWorld(i, clamp(aim.x, -1, 1) * tuning.width, 0).x;
+  const end = endOf(s, i);
+  const lateral = localToWorld(end, clamp(aim.x, -1, 1) * tuning.width, 0).x;
   const depth = Math.max(0.5, depthFor(tuning, aim.y) - weak * tuning.weakDepth);
-  const target = { x: clamp(lateral, -HALF_WIDTH + 0.15, HALF_WIDTH - 0.15), z: facing(i) * depth };
+  const target = { x: clamp(lateral, -HALF_WIDTH + 0.15, HALF_WIDTH - 0.15), z: facing(end) * depth };
 
   let smash = false;
   let vel: Vec3 | null = null;
@@ -208,6 +244,7 @@ function launch(
   ball.spin = spin;
   ball.lastHitBy = i;
   ball.bouncesSinceHit = 0;
+  s.shots++;
   player.commit = null;
   player.aiming = false;
   player.swing = { type, tick: s.tick };
@@ -217,35 +254,93 @@ function launch(
 function onBounce(s: SimState, pos: Vec3) {
   const { ball } = s;
   ball.bouncesSinceHit++;
-  if (ball.bouncesSinceHit >= 2) return die(s, 'double-bounce');
-  if (ball.lastHitBy !== null && sideOfZ(pos.z) === ball.lastHitBy) return die(s, 'net');
-  if (!isInBounds(pos.x, pos.z)) return die(s, 'out');
+  if (ball.bouncesSinceHit >= 2) return die(s, 'double-bounce', defenderOfBounce(s, pos));
+  if (ball.lastHitBy === null) return;
+  if (endOfZ(pos.z) === endOf(s, ball.lastHitBy)) return die(s, 'net', ball.lastHitBy);
+  if (s.shots === 1) {
+    // The Kitchen line is part of the Kitchen; the centerline counts for both Service courts.
+    if (Math.abs(pos.z) <= KITCHEN_DEPTH) return die(s, 'service-kitchen', ball.lastHitBy);
+    if (pos.x * serviceCourtSign(s) < -CENTERLINE_HALF) return die(s, 'service-court', ball.lastHitBy);
+  }
+  if (!isInBounds(pos.x, pos.z)) return die(s, 'out', ball.lastHitBy);
 }
 
 function checkRolling(s: SimState) {
   const { ball } = s;
+  if (ball.lastHitBy === null) return;
   const onGround = ball.pos.y <= BALL_RADIUS + 1e-6 && ball.vel.y === 0;
   if (onGround) {
-    return die(s, ball.lastHitBy !== null && sideOfZ(ball.pos.z) === ball.lastHitBy ? 'net' : 'double-bounce');
+    const onHitterSide = endOfZ(ball.pos.z) === endOf(s, ball.lastHitBy);
+    return onHitterSide ? die(s, 'net', ball.lastHitBy) : die(s, 'double-bounce', other(ball.lastHitBy));
   }
-  if (Math.abs(ball.pos.x) > HALF_WIDTH + FAR || Math.abs(ball.pos.z) > HALF_LENGTH + FAR) die(s, 'gone');
+  if (Math.abs(ball.pos.x) > HALF_WIDTH + FAR || Math.abs(ball.pos.z) > HALF_LENGTH + FAR) {
+    // Gone: a winner if it bounced in first, otherwise it was hit out.
+    if (ball.bouncesSinceHit > 0) die(s, 'double-bounce', other(ball.lastHitBy));
+    else die(s, 'out', ball.lastHitBy);
+  }
 }
 
-function die(s: SimState, reason: DeadReason) {
+/** Sign of world x for the receiver's (diagonal) Service court. */
+function serviceCourtSign(s: SimState): number {
+  const serverLocalX = s.match.points[s.server] % 2 === 0 ? 1 : -1;
+  return -Math.sign(localToWorld(endOf(s, s.server), serverLocalX, 0).x);
+}
+
+/** The Side whose End a bounce landed in. */
+function defenderOfBounce(s: SimState, pos: Vec3): SideIndex {
+  return endOf(s, 0) === endOfZ(pos.z) ? 0 : 1;
+}
+
+function die(s: SimState, reason: DeadReason, loser: SideIndex) {
   s.phase = 'dead';
   s.phaseTick = s.tick;
   for (const side of s.sides) for (const p of side.players) p.commit = null;
-  s.events.push({ kind: 'dead', reason });
+  s.events.push({ kind: 'dead', reason, loser });
+  awardRally(s, other(loser));
+}
+
+function awardRally(s: SimState, winner: SideIndex) {
+  const { match } = s;
+  const sideOut = !match.config.rallyScoring && winner !== s.server;
+  if (!sideOut) match.points[winner]++;
+  s.server = winner;
+  s.events.push({ kind: 'rally-won', winner, sideOut });
+
+  if (gameWinner(match) !== winner) return;
+  match.games[winner]++;
+  s.events.push({ kind: 'game', winner });
+  if (match.games[winner] > match.config.bestOf / 2) {
+    match.winner = winner;
+    s.events.push({ kind: 'match', winner });
+  }
+}
+
+function gameWinner(match: Match): SideIndex | null {
+  const { points, config } = match;
+  for (const side of [0, 1] as const) {
+    if (points[side] >= config.pointsToWin && points[side] - points[other(side)] >= config.winBy) return side;
+  }
+  return null;
+}
+
+/** Ends switch between Games, and the first serve alternates. */
+function startNextGame(s: SimState) {
+  const { match } = s;
+  match.points = [0, 0];
+  match.ends = [match.ends[1], match.ends[0]];
+  match.gameFirstServer = other(match.gameFirstServer);
+  s.server = match.gameFirstServer;
 }
 
 function movePlayer(s: SimState, i: SideIndex, intent: Intent, t: SimTuning) {
   const player = s.sides[i].players[0];
-  const f = facing(i);
+  const end = endOf(s, i);
+  const f = facing(end);
   const mx = intent.move.x;
   const my = intent.move.y;
   const mag = Math.hypot(mx, my);
   const scale = mag > 1 ? 1 / mag : 1;
-  const want = localToWorld(i, mx * scale * t.playerSpeed, my * scale * t.playerSpeed);
+  const want = localToWorld(end, mx * scale * t.playerSpeed, my * scale * t.playerSpeed);
 
   const serving = s.phase === 'serve' && i === s.server;
   if (serving) want.z = 0;
@@ -268,7 +363,7 @@ function movePlayer(s: SimState, i: SideIndex, intent: Intent, t: SimTuning) {
   let assistX = 0;
   let assistZ = 0;
   if (player.aiming) {
-    const sweet = localToWorld(i, t.sweetSpotSide, t.sweetSpotForward);
+    const sweet = localToWorld(end, t.sweetSpotSide, t.sweetSpotForward);
     const dx = ball.pos.x - sweet.x - player.pos.x;
     const dz = ball.pos.z - sweet.z - player.pos.z;
     const d = Math.hypot(dx, dz);
@@ -279,8 +374,15 @@ function movePlayer(s: SimState, i: SideIndex, intent: Intent, t: SimTuning) {
     }
   }
 
+  const wasOutsideKitchen = !inKitchen(player, t);
   player.pos.x += (player.vel.x + assistX) * TICK;
   player.pos.z += (player.vel.z + assistZ) * TICK;
+
+  // The assist owns footwork here, so it must never walk the Player into a Kitchen fault.
+  if (player.aiming && ball.bouncesSinceHit === 0 && wasOutsideKitchen && inKitchen(player, t)) {
+    player.pos.z = -f * (KITCHEN_DEPTH + t.footRadius);
+    player.vel.z = 0;
+  }
 
   if (serving) {
     const half = Math.sign(player.pos.x) || 1;
@@ -298,13 +400,13 @@ function movePlayer(s: SimState, i: SideIndex, intent: Intent, t: SimTuning) {
 function setUpServe(s: SimState) {
   s.phase = 'serve';
   s.phaseTick = s.tick;
+  s.shots = 0;
   const server = s.server;
-  const receiver: SideIndex = server === 0 ? 1 : 0;
-  // Right-hand service court on even serves, left on odd.
-  const localX = s.serveCount % 2 === 0 ? SERVE_X : -SERVE_X;
-  place(s.sides[server].players[0], server, localToWorld(server, localX, 0).x);
+  const receiver = other(server);
+  const serverX = -serviceCourtSign(s) * SERVE_X;
+  place(s.sides[server].players[0], endOf(s, server), serverX);
   // The receiver stands diagonally opposite, which is the same world x mirrored.
-  place(s.sides[receiver].players[0], receiver, -localToWorld(server, localX, 0).x);
+  place(s.sides[receiver].players[0], endOf(s, receiver), -serverX);
   s.ball.vel = { x: 0, y: 0, z: 0 };
   s.ball.spin = 0;
   s.ball.lastHitBy = null;
@@ -312,8 +414,8 @@ function setUpServe(s: SimState) {
   holdBall(s);
 }
 
-function place(p: Player, side: SideIndex, x: number) {
-  p.pos = { x, y: 0, z: -facing(side) * (HALF_LENGTH + BASELINE_OFFSET) };
+function place(p: Player, end: End, x: number) {
+  p.pos = { x, y: 0, z: -facing(end) * (HALF_LENGTH + BASELINE_OFFSET) };
   p.vel = { x: 0, y: 0, z: 0 };
   p.commit = null;
   p.aiming = false;
@@ -321,13 +423,17 @@ function place(p: Player, side: SideIndex, x: number) {
 
 function holdBall(s: SimState) {
   const player = s.sides[s.server].players[0];
-  const offset = localToWorld(s.server, 0.3, 0.35);
+  const offset = localToWorld(endOf(s, s.server), 0.3, 0.35);
   s.ball.pos = { x: player.pos.x + offset.x, y: 0.75, z: player.pos.z + offset.z };
 }
 
 function depthFor(tuning: ShotTuning, aimY: number): number {
   const d = tuning.depth + clamp(aimY, -1, 1) * tuning.depthRange;
   return clamp(d, tuning.minDepth, tuning.maxDepth);
+}
+
+export function other(side: SideIndex): SideIndex {
+  return side === 0 ? 1 : 0;
 }
 
 function clamp(v: number, lo: number, hi: number): number {

@@ -1,4 +1,4 @@
 export * from './types';
 export * from './court';
-export { createInitialState, step } from './step';
+export { DEFAULT_MATCH, createInitialState, endOf, other, step } from './step';
 export { TICK, solveShot, simulateFlight } from './solver';

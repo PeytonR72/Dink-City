@@ -13,6 +13,9 @@ export interface Vec2 {
 
 export type SideIndex = 0 | 1;
 
+/** A physical half of the court. End 0 is the +z half. Sides switch Ends between Games. */
+export type End = 0 | 1;
+
 export type ShotType = 'soft' | 'drive' | 'lob';
 
 /**
@@ -66,15 +69,48 @@ export interface Ball {
   bouncesSinceHit: number;
 }
 
-export type Phase = 'serve' | 'rally' | 'dead';
+/** `over` once the Match has a winner. */
+export type Phase = 'serve' | 'rally' | 'dead' | 'over';
 
-export type DeadReason = 'out' | 'double-bounce' | 'net' | 'gone';
+/** Why a Rally ended. The `loser` on the dead event is the Side at fault. */
+export type DeadReason =
+  | 'out'
+  | 'net'
+  | 'double-bounce'
+  | 'service-kitchen'
+  | 'service-court'
+  | 'two-bounce'
+  | 'kitchen';
 
 export type SimEvent =
   | { kind: 'hit'; side: SideIndex; type: ShotType; smash: boolean; quality: number; pos: Vec3; speed: number }
   | { kind: 'bounce'; pos: Vec3; speed: number }
   | { kind: 'net'; pos: Vec3; cord: boolean }
-  | { kind: 'dead'; reason: DeadReason };
+  | { kind: 'dead'; reason: DeadReason; loser: SideIndex }
+  /** Rally won. With Side-out scoring, a receiver's win is a Side-out and scores no point. */
+  | { kind: 'rally-won'; winner: SideIndex; sideOut: boolean }
+  | { kind: 'game'; winner: SideIndex }
+  | { kind: 'match'; winner: SideIndex };
+
+/** Match rules. Part of the Sim state, not Tuning, because they change the rules rather than the feel. */
+export interface MatchConfig {
+  pointsToWin: number;
+  winBy: number;
+  rallyScoring: boolean;
+  bestOf: 1 | 3;
+}
+
+export interface Match {
+  config: MatchConfig;
+  /** Points in the current Game, by Side. */
+  points: [number, number];
+  games: [number, number];
+  /** The End each Side plays from in the current Game. */
+  ends: [End, End];
+  /** The Side that served first in the current Game. */
+  gameFirstServer: SideIndex;
+  winner: SideIndex | null;
+}
 
 export interface SimState {
   tick: number;
@@ -83,7 +119,9 @@ export interface SimState {
   phase: Phase;
   phaseTick: number;
   server: SideIndex;
-  serveCount: number;
+  match: Match;
+  /** Hits so far this Rally, the Serve included. */
+  shots: number;
   ball: Ball;
   sides: [Side, Side];
   /** Events emitted during the most recent step only. */
@@ -124,6 +162,12 @@ export interface SimTuning {
   /** Extra range beyond reach where the contact assist pulls the Player in, and move input switches to aim. */
   assistRange: number;
   assistSpeed: number;
+
+  /**
+   * Players are points on the ground; a foot within this distance of the
+   * Kitchen line counts as touching it (which is in the Kitchen).
+   */
+  footRadius: number;
 
   /** Drive contact at or above this height becomes a Smash. */
   smashHeight: number;

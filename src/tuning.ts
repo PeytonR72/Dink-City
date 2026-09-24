@@ -23,6 +23,7 @@ export const simTuning: SimTuning = {
   edgeQuality: 0.3,
   assistRange: 0.9,
   assistSpeed: 2.5,
+  footRadius: 0.12,
 
   smashHeight: 1.5,
   smashSpeed: 21,

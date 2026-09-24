@@ -9,6 +9,7 @@ import {
   KITCHEN_DEPTH,
   NET_POST_X,
   TICK,
+  endOf,
   netHeight,
   type Player,
   type SimState,
@@ -32,6 +33,8 @@ const COLORS = {
 };
 
 const SWING_SECONDS = 0.3;
+/** The Side this screen belongs to. */
+const LOCAL_SIDE = 0;
 
 interface PlayerView {
   root: THREE.Group;
@@ -45,6 +48,8 @@ export class Renderer {
   readonly camera: THREE.PerspectiveCamera;
   private renderer: THREE.WebGLRenderer;
   private scene = new THREE.Scene();
+  /** Everything on the court. Turned 180° when the local Player is at End 1, so they always appear at the bottom. */
+  private world = new THREE.Group();
   private ball: THREE.Mesh;
   private ballShadow: THREE.Mesh;
   private players: PlayerView[];
@@ -65,17 +70,18 @@ export class Renderer {
     sun.position.set(-6, 12, 4);
     this.scene.add(sun);
 
+    this.scene.add(this.world);
     this.buildCourt();
 
     this.ball = new THREE.Mesh(
       new THREE.IcosahedronGeometry(BALL_RADIUS, 1),
       new THREE.MeshLambertMaterial({ color: COLORS.ball, flatShading: true }),
     );
-    this.scene.add(this.ball);
+    this.world.add(this.ball);
     this.ballShadow = blobShadow(BALL_RADIUS * 1.6);
-    this.scene.add(this.ballShadow);
+    this.world.add(this.ballShadow);
 
-    this.players = [0, 1].map((i) => this.buildPlayer(COLORS.sides[i], i === 0 ? 0 : Math.PI));
+    this.players = [0, 1].map((i) => this.buildPlayer(COLORS.sides[i]));
 
     this.resize();
     window.addEventListener('resize', () => this.resize());
@@ -83,6 +89,8 @@ export class Renderer {
 
   render(prev: SimState, curr: SimState, alpha: number, dt: number) {
     const v = this.view;
+    const mirrored = endOf(curr, LOCAL_SIDE) === 1;
+    this.world.rotation.y = mirrored ? Math.PI : 0;
     const ballPos = lerpVec(prev.ball.pos, curr.ball.pos, alpha);
     this.ball.position.set(ballPos.x, ballPos.y, ballPos.z);
     this.ball.scale.setScalar(v.ballScale);
@@ -97,19 +105,21 @@ export class Renderer {
       const p = lerpVec(prev.sides[i].players[0].pos, curr.sides[i].players[0].pos, alpha);
       const pv = this.players[i];
       pv.root.position.set(p.x, 0, p.z);
+      pv.root.rotation.y = endOf(curr, i) === 0 ? 0 : Math.PI;
       pv.shadow.position.set(p.x, 0.003, p.z);
       const player = curr.sides[i].players[0];
       pv.arm.rotation.y = swingAngle(player, curr.tick + alpha);
       pv.ring.position.set(p.x, 0.006, p.z);
-      pv.ring.visible = i === 0 && player.commit !== null;
+      pv.ring.visible = i === LOCAL_SIDE && player.commit !== null;
       const ringMat = pv.ring.material as THREE.MeshBasicMaterial;
       ringMat.color.setHex(player.aiming ? COLORS.aim : COLORS.line);
       ringMat.opacity = player.aiming ? 0.95 : 0.4;
     }
 
-    const local = curr.sides[0].players[0].pos;
+    const local = curr.sides[LOCAL_SIDE].players[0].pos;
+    const screenX = mirrored ? -local.x : local.x;
     const followK = 1 - Math.exp(-v.cameraDamping * dt);
-    this.cameraX += (local.x * v.cameraFollowX - this.cameraX) * followK;
+    this.cameraX += (screenX * v.cameraFollowX - this.cameraX) * followK;
     if (this.camera.fov !== v.fov) {
       this.camera.fov = v.fov;
       this.camera.updateProjectionMatrix();
@@ -133,7 +143,7 @@ export class Renderer {
       const m = new THREE.Mesh(new THREE.PlaneGeometry(w, d), new THREE.MeshLambertMaterial({ color }));
       m.rotation.x = -Math.PI / 2;
       m.position.set(x, y, z);
-      this.scene.add(m);
+      this.world.add(m);
     };
     flat(80, 80, COLORS.ground, -0.01);
     flat(COURT_WIDTH + 6, COURT_LENGTH + 8, COLORS.apron, 0);
@@ -161,7 +171,7 @@ export class Renderer {
       netGeo,
       new THREE.MeshLambertMaterial({ color: COLORS.net, transparent: true, opacity: 0.7, side: THREE.DoubleSide }),
     );
-    this.scene.add(net);
+    this.world.add(net);
 
     const tape = new THREE.MeshLambertMaterial({ color: COLORS.line });
     const SEGMENTS = 12;
@@ -170,20 +180,19 @@ export class Renderer {
       const x1 = x0 + (2 * NET_POST_X) / SEGMENTS;
       const seg = new THREE.Mesh(new THREE.BoxGeometry(x1 - x0, 0.05, 0.03), tape);
       seg.position.set((x0 + x1) / 2, netHeight((x0 + x1) / 2) - 0.02, 0);
-      this.scene.add(seg);
+      this.world.add(seg);
     }
 
     const postMat = new THREE.MeshLambertMaterial({ color: COLORS.post });
     for (const s of [-1, 1]) {
       const post = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.95, 0.08), postMat);
       post.position.set(s * NET_POST_X, 0.475, 0);
-      this.scene.add(post);
+      this.world.add(post);
     }
   }
 
-  private buildPlayer(color: number, rotationY: number): PlayerView {
+  private buildPlayer(color: number): PlayerView {
     const root = new THREE.Group();
-    root.rotation.y = rotationY;
     const body = new THREE.MeshLambertMaterial({ color, flatShading: true });
     const skin = new THREE.MeshLambertMaterial({ color: 0xf2c29b, flatShading: true });
 
@@ -209,7 +218,7 @@ export class Renderer {
       new THREE.MeshBasicMaterial({ color: COLORS.line, transparent: true, depthWrite: false }),
     );
     ring.rotation.x = -Math.PI / 2;
-    this.scene.add(root, shadow, ring);
+    this.world.add(root, shadow, ring);
     return { root, arm, shadow, ring };
   }
 }

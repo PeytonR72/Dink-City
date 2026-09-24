@@ -1,58 +1,79 @@
-import { createBasicBot } from './bot/basicBot';
+import { DIFFICULTY, createBot, type Bot } from './bot/bot';
+import { observe } from './bot/observe';
+import { Hud } from './hud/hud';
 import { Input } from './input/input';
 import { Renderer } from './render/renderer';
-import { TICK, createInitialState, step, type DeadReason, type Intent, type SimEvent, type SimState } from './sim';
+import { DEFAULT_MATCH, TICK, createInitialState, step, type Intent, type MatchConfig, type SimEvent, type SimState } from './sim';
 import { simTuning, viewTuning } from './tuning';
 
 const MAX_FRAME = 0.25;
-const CALLOUTS: Record<DeadReason, string> = {
-  out: 'OUT',
-  'double-bounce': 'POINT',
-  net: 'NET',
-  gone: 'OUT',
-};
+const LOCAL = 0;
+
+// Rule flags for playtesting: ?rally (Rally scoring), ?bo3 (best of 3), ?bot=easy|medium|hard.
+const params = new URLSearchParams(location.search);
+const config: MatchConfig = { ...DEFAULT_MATCH, rallyScoring: params.has('rally'), bestOf: params.has('bo3') ? 3 : 1 };
+const difficulty = DIFFICULTY[(params.get('bot') ?? 'medium') as keyof typeof DIFFICULTY] ?? DIFFICULTY.medium;
 
 const canvas = document.querySelector<HTMLCanvasElement>('#game')!;
-const callout = document.querySelector<HTMLDivElement>('#callout')!;
-
 const renderer = new Renderer(canvas, viewTuning);
 const input = new Input();
-const bot = createBasicBot(1, 1234);
+const hud = new Hud(document.querySelector('#hud')!, LOCAL);
 
-let prev: SimState = createInitialState(Date.now());
-let curr: SimState = prev;
+let bot: Bot;
+let prev: SimState;
+let curr: SimState;
+/** The current Rally's start state and every Tick's Intents since: enough to replay it (Fault Replays, milestone 05). */
+let rally: { start: SimState; intents: [Intent, Intent][] };
 let acc = 0;
 let last = performance.now();
-let calloutTimer = 0;
 const eventLog: ({ tick: number } & SimEvent)[] = [];
 
-if (import.meta.env.DEV && new URLSearchParams(location.search).has('debug')) {
+function newMatch(seed: number) {
+  bot = createBot(1, seed ^ 0x5eed, difficulty, simTuning);
+  curr = prev = createInitialState(seed, config);
+  rally = { start: curr, intents: [] };
+  hud.reset();
+}
+newMatch(Date.now());
+
+if (import.meta.env.DEV && params.has('debug')) {
   import('./debug/panel').then(({ createDebugPanel }) => createDebugPanel(simTuning, viewTuning));
 }
 
-// Exposed for Playwright playtests and console poking.
+// Exposed for playtests and console poking.
 (window as unknown as { dink: unknown }).dink = {
   get state() {
     return curr;
   },
+  get rally() {
+    return rally;
+  },
   simTuning,
   viewTuning,
   eventLog,
+  newMatch,
   /** Step N Ticks synchronously (works while the tab is hidden). `drive` overrides local input. */
   advance(ticks: number, drive?: (s: SimState) => Intent) {
     for (let i = 0; i < ticks; i++) tick(drive?.(curr));
     renderer.render(prev, curr, 1, TICK);
+    hud.update(curr, ticks * TICK);
     return curr;
   },
 };
 
 function tick(local: Intent = input.sample()) {
-  prev = curr;
-  curr = step(curr, [local, bot.think(curr)], simTuning);
-  for (const e of curr.events) {
-    if (e.kind === 'dead') showCallout(CALLOUTS[e.reason]);
-    eventLog.push({ tick: curr.tick, ...e });
+  if (curr.phase === 'over') {
+    if (local.shot) newMatch(Date.now());
+    return;
   }
+  const intents: [Intent, Intent] = [local, bot.think(observe(curr, 1))];
+  prev = curr;
+  curr = step(curr, intents, simTuning);
+  if (curr.phase === 'serve' && prev.phase !== 'serve') rally = { start: curr, intents: [] };
+  else rally.intents.push(intents);
+
+  hud.onEvents(curr, curr.events);
+  for (const e of curr.events) eventLog.push({ tick: curr.tick, ...e });
   if (eventLog.length > 100) eventLog.splice(0, eventLog.length - 100);
 }
 
@@ -66,17 +87,9 @@ function frame(now: number) {
     acc -= TICK;
   }
 
-  calloutTimer -= dt;
-  if (calloutTimer <= 0) callout.classList.remove('show');
-
+  hud.update(curr, dt);
   renderer.render(prev, curr, acc / TICK, dt);
   requestAnimationFrame(frame);
-}
-
-function showCallout(text: string) {
-  callout.textContent = text;
-  callout.classList.add('show');
-  calloutTimer = 1.1;
 }
 
 requestAnimationFrame(frame);

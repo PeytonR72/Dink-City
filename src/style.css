@@ -21,20 +21,71 @@ body {
   text-shadow: 0 2px 0 rgba(0, 0, 0, 0.35);
 }
 
-#callout {
+#banner {
   position: absolute;
-  top: 18%;
+  top: 16%;
   width: 100%;
   text-align: center;
-  font-size: 44px;
-  font-weight: 900;
-  letter-spacing: 0.04em;
   opacity: 0;
   transition: opacity 0.15s;
 }
 
-#callout.show {
+#banner.show {
   opacity: 1;
+}
+
+#callout {
+  font-size: 44px;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+}
+
+#detail {
+  margin-top: 6px;
+  font-size: 20px;
+  font-weight: 700;
+}
+
+#scoreboard {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: rgba(20, 30, 50, 0.45);
+  font-size: 20px;
+  font-weight: 800;
+}
+
+#scoreboard .row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+#scoreboard .serve {
+  width: 14px;
+  color: #ffd23f;
+  visibility: hidden;
+}
+
+#scoreboard .serving .serve {
+  visibility: visible;
+}
+
+#scoreboard .name {
+  min-width: 44px;
+}
+
+#scoreboard .points {
+  min-width: 24px;
+  text-align: right;
+}
+
+#games {
+  margin-top: 2px;
+  font-size: 13px;
+  font-weight: 600;
 }
 
 #controls {
