@@ -1,5 +1,6 @@
-// Plain DOM HUD: score, server, and the Fault banner.
+// Plain DOM HUD: score, server, the Fault banner, and call-outs.
 import type { SideIndex, SimEvent, SimState } from '../sim';
+import { calloutFor } from './callout';
 import { faultText } from './faultText';
 
 const NAMES = ['YOU', 'BOT'] as const;
@@ -10,6 +11,7 @@ export class Hud {
   private games: HTMLElement;
   private callout: HTMLElement;
   private detail: HTMLElement;
+  private shoutEl: HTMLElement;
   private bannerTimer = 0;
   private sticky = false;
 
@@ -24,12 +26,14 @@ export class Hud {
         <div class="row"><span class="serve">●</span><span class="name"></span><span class="points"></span></div>
         <div id="games"></div>
       </div>
-      <div id="banner"><div id="callout"></div><div id="detail"></div></div>`,
+      <div id="banner"><div id="callout"></div><div id="detail"></div></div>
+      <div id="shout"></div>`,
     );
     this.rows = [...root.querySelectorAll<HTMLElement>('#scoreboard .row')];
     this.games = root.querySelector('#games')!;
     this.callout = root.querySelector('#callout')!;
     this.detail = root.querySelector('#detail')!;
+    this.shoutEl = root.querySelector('#shout')!;
   }
 
   /** Local Player's row first. */
@@ -54,6 +58,8 @@ export class Hud {
 
   onEvents(s: SimState, events: readonly SimEvent[]) {
     for (const e of events) {
+      const shout = calloutFor(e, this.local);
+      if (shout) this.shout(shout);
       if (e.kind === 'dead') {
         const { title, detail } = faultText(e.reason, e.loser === this.local);
         this.show(title, detail, BANNER_SECONDS);
@@ -81,6 +87,14 @@ export class Hud {
     this.detail.textContent = detail;
     this.bannerTimer = seconds;
     this.callout.parentElement!.classList.toggle('show', title !== '');
+  }
+
+  /** Pops a call-out; restarting the CSS animation lets back-to-back call-outs replay. */
+  private shout(text: string) {
+    this.shoutEl.textContent = text;
+    this.shoutEl.classList.remove('pop');
+    void this.shoutEl.offsetWidth;
+    this.shoutEl.classList.add('pop');
   }
 
   private appendDetail(text: string) {

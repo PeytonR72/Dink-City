@@ -26,6 +26,7 @@ export function simulateFlight(from: Vec3, vel: Vec3, spin: number, t: SimTuning
     spin,
     lastHitBy: null,
     bouncesSinceHit: 0,
+    hitTick: 0,
   };
   const path: Vec3[] = [{ ...ball.pos }];
   let apex = ball.pos.y;

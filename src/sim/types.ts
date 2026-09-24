@@ -19,6 +19,28 @@ export type End = 0 | 1;
 export type ShotType = 'soft' | 'drive' | 'lob';
 
 /**
+ * What a Shot type became at Contact. Soft becomes a Dink (from the Kitchen
+ * line), a Drop (from deep) or a Block (against a very fast ball); Drive
+ * becomes a Smash against a high ball. Either button starts a Serve.
+ */
+export type ShotVariant = 'serve' | 'dink' | 'drop' | 'block' | 'drive' | 'smash' | 'lob';
+
+/** Rally variants with their own ShotTuning. A Smash uses the Drive's, plus `smashSpeed`; Serves use `serves`. */
+export type TunedVariant = Exclude<ShotVariant, 'smash' | 'serve'>;
+
+/** The Shot quality inputs (ADR-0002), each 0–1. Shot quality is their product. */
+export interface QualityFactors {
+  /** How close to the sweet spot the ball was met. */
+  set: number;
+  /** How early in the ball's flight the Commit was pressed. */
+  timing: number;
+  /** Contact height (very low balls are hard to hit well). */
+  height: number;
+  /** Incoming pace (a Block ignores it). */
+  pace: number;
+}
+
+/**
  * One Tick of input for one Player. `move` and `aim` are in the Player's local
  * frame: +x is the Player's right, +y is forward (toward the net).
  */
@@ -38,6 +60,7 @@ export interface Commit {
 
 export interface Swing {
   type: ShotType;
+  variant: ShotVariant;
   tick: number;
 }
 
@@ -69,6 +92,8 @@ export interface Ball {
   /** Side that last hit the ball, or null while held for a Serve. */
   lastHitBy: SideIndex | null;
   bouncesSinceHit: number;
+  /** Tick of the last hit (or Serve). Commit timing is measured against the flight since. */
+  hitTick: number;
 }
 
 /** `over` once the Match has a winner. */
@@ -85,7 +110,18 @@ export type DeadReason =
   | 'kitchen';
 
 export type SimEvent =
-  | { kind: 'hit'; side: SideIndex; type: ShotType; smash: boolean; quality: number; pos: Vec3; speed: number }
+  | {
+      kind: 'hit';
+      side: SideIndex;
+      type: ShotType;
+      variant: ShotVariant;
+      /** Contact before the bounce. The Serve is never a Volley. */
+      volley: boolean;
+      quality: number;
+      factors: QualityFactors;
+      pos: Vec3;
+      speed: number;
+    }
   | { kind: 'bounce'; pos: Vec3; speed: number }
   | { kind: 'net'; pos: Vec3; cord: boolean }
   | { kind: 'dead'; reason: DeadReason; loser: SideIndex }
@@ -178,13 +214,36 @@ export interface SimTuning {
   /** A Soft met within this normalized sweet-spot distance counts as perfect and isn't overhit. */
   softPerfectRadius: number;
 
+  /** Extra random miss, in meters, at Shot quality 0. Scales with (1 − quality)², so only poor shots spray. */
+  qualityAimError: number;
+
+  /**
+   * Commit timing, as a fraction of the incoming ball's flight: pressed by
+   * `commitFullFraction` gives full quality, pressed after
+   * `commitRushedFraction` is rushed (`rushedQuality`), linear between.
+   */
+  commitFullFraction: number;
+  commitRushedFraction: number;
+  rushedQuality: number;
+  /** Contact below this height loses quality, down to `lowContactQuality` at the ground. */
+  lowContactHeight: number;
+  lowContactQuality: number;
+  /** Incoming speed (m/s) above `paceStart` loses quality, down to `paceQuality` at `paceFull`. */
+  paceStart: number;
+  paceFull: number;
+  paceQuality: number;
+
+  /** A Soft met within this distance behind the Kitchen line is a Dink; from further back, a Drop. */
+  dinkZone: number;
+  /** A Soft against an incoming ball at least this fast (m/s) is a Block. */
+  blockSpeed: number;
   /** Drive contact at or above this height becomes a Smash. */
   smashHeight: number;
   smashSpeed: number;
 
   deadTicks: number;
 
-  shots: Record<ShotType, ShotTuning>;
+  shots: Record<TunedVariant, ShotTuning>;
   serves: Record<'soft' | 'drive', ShotTuning>;
 }
 

@@ -32,12 +32,15 @@ function landing(c: Contact): { x: number; depth: number } {
   let s: SimState = structuredClone(createInitialState(c.seed));
   s.phase = 'rally';
   s.shots = 4;
+  s.tick = 100;
   const player = { x: 0, y: 0, z: c.depth };
   const sweet = localToWorld(endOf(s, 0), t.sweetSpotSide + (c.offCenter ?? 0) * t.reachSide, t.sweetSpotForward);
   s.sides[0].players[0].pos = player;
   s.sides[0].players[0].vel = { x: c.running ?? 0, y: 0, z: 0 };
-  s.ball = { pos: { x: player.x + sweet.x, y: 0.7, z: player.z + sweet.z }, vel: { x: 0, y: 0, z: 0 }, spin: 0, lastHitBy: 1, bouncesSinceHit: 1 };
-  s = step(s, [{ ...idle, shot: c.type, aim: c.aim ?? { x: 0, y: 0 } }, idle], t);
+  // Committed early in the ball's flight, so timing is perfect.
+  s.sides[0].players[0].commit = { type: c.type, tick: 50, bestDistance: null };
+  s.ball = { pos: { x: player.x + sweet.x, y: 0.7, z: player.z + sweet.z }, vel: { x: 0, y: 0, z: 0 }, spin: 0, lastHitBy: 1, bouncesSinceHit: 1, hitTick: 40 };
+  s = step(s, [{ ...idle, aim: c.aim ?? { x: 0, y: 0 } }, idle], t);
   expect(s.events.some((e) => e.kind === 'hit')).toBe(true);
   for (let i = 0; i < 400; i++) {
     s = step(s, [idle, idle], t);
@@ -78,7 +81,7 @@ describe('Aim error from moving at Contact', () => {
 });
 
 describe('Soft shots from deep', () => {
-  const dinkDepth = t.shots.soft.depth;
+  const dinkDepth = t.shots.dink.depth;
 
   it('lands a dead-center Soft from the baseline short', () => {
     const p = landing({ seed: 1, type: 'soft', depth: 6.5 });

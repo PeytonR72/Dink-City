@@ -14,6 +14,10 @@ export function createDebugPanel(sim: SimTuning, view: ViewTuning) {
   v.addBinding(view, 'lookAtZ', { min: -8, max: 4, step: 0.1 });
   v.addBinding(view, 'cameraFollowX', { min: 0, max: 1, step: 0.05 });
   v.addBinding(view, 'ballScale', { min: 1, max: 3, step: 0.1 });
+  v.addBinding(view, 'trailLength', { min: 0, max: 16, step: 1 });
+  v.addBinding(view, 'hitStopMs', { min: 0, max: 150, step: 5 });
+  v.addBinding(view, 'hitStopSpeed', { min: 5, max: 30, step: 0.5 });
+  v.addBinding(view, 'volume', { min: 0, max: 1, step: 0.05 });
 
   const p = pane.addFolder({ title: 'Physics', expanded: false });
   p.addBinding(sim, 'gravity', { min: 5, max: 15 });
@@ -42,6 +46,19 @@ export function createDebugPanel(sim: SimTuning, view: ViewTuning) {
   pl.addBinding(sim, 'softPerfectRadius', { min: 0, max: 0.45 });
   pl.addBinding(sim, 'smashHeight', { min: 1, max: 2.5 });
   pl.addBinding(sim, 'smashSpeed', { min: 10, max: 35 });
+
+  const q = pane.addFolder({ title: 'Shot quality', expanded: false });
+  q.addBinding(sim, 'commitFullFraction', { min: 0, max: 1, step: 0.05 });
+  q.addBinding(sim, 'commitRushedFraction', { min: 0, max: 1, step: 0.05 });
+  q.addBinding(sim, 'rushedQuality', { min: 0, max: 1, step: 0.05 });
+  q.addBinding(sim, 'lowContactHeight', { min: 0.05, max: 1, step: 0.05 });
+  q.addBinding(sim, 'lowContactQuality', { min: 0, max: 1, step: 0.05 });
+  q.addBinding(sim, 'paceStart', { min: 0, max: 25, step: 0.5 });
+  q.addBinding(sim, 'paceFull', { min: 0, max: 30, step: 0.5 });
+  q.addBinding(sim, 'paceQuality', { min: 0, max: 1, step: 0.05 });
+  q.addBinding(sim, 'qualityAimError', { min: 0, max: 3, step: 0.05 });
+  q.addBinding(sim, 'dinkZone', { min: 0, max: 4.6, step: 0.1 });
+  q.addBinding(sim, 'blockSpeed', { min: 5, max: 25, step: 0.5 });
 
   const shots = pane.addFolder({ title: 'Shots', expanded: false });
   for (const [name, s] of [...Object.entries(sim.shots), ...Object.entries(sim.serves).map(([k, v]) => [`serve ${k}`, v] as const)]) {

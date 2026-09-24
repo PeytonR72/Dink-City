@@ -46,6 +46,46 @@ body {
   font-weight: 700;
 }
 
+#shout {
+  position: absolute;
+  top: 34%;
+  width: 100%;
+  text-align: center;
+  font-size: 64px;
+  font-weight: 900;
+  font-style: italic;
+  letter-spacing: 0.02em;
+  color: #ffd23f;
+  -webkit-text-stroke: 3px #1d2433;
+  text-shadow: 0 5px 0 #1d2433;
+  opacity: 0;
+}
+
+#shout.pop {
+  animation: shout 0.9s ease-out;
+}
+
+@keyframes shout {
+  0% {
+    opacity: 0;
+    transform: scale(0.4) rotate(-6deg);
+  }
+  15% {
+    opacity: 1;
+    transform: scale(1.15) rotate(-3deg);
+  }
+  30% {
+    transform: scale(1) rotate(-3deg);
+  }
+  75% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.05) rotate(-3deg) translateY(-12px);
+  }
+}
+
 #scoreboard {
   position: absolute;
   top: 12px;

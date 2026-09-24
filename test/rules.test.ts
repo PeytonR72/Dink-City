@@ -30,7 +30,7 @@ function midRally(s: SimState, hitter: SideIndex, pos: Vec3, vel: Vec3, shots = 
   s.phase = 'rally';
   s.phaseTick = s.tick;
   s.shots = shots;
-  s.ball = { pos, vel, spin: 0, lastHitBy: hitter, bouncesSinceHit: bounces };
+  s.ball = { pos, vel, spin: 0, lastHitBy: hitter, bouncesSinceHit: bounces, hitTick: s.tick - 60 };
   return s;
 }
 

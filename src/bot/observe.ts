@@ -1,6 +1,6 @@
 // What a Bot is allowed to see (ADR-0003): what a player on court could see.
 // Bots take an Observation, never the SimState, so they can't peek at Sim internals.
-import { endOf, other, type End, type Phase, type ShotType, type SideIndex, type SimState, type Vec3 } from '../sim';
+import { endOf, other, type End, type Phase, type ShotType, type ShotVariant, type SideIndex, type SimState, type Vec3 } from '../sim';
 
 export interface Observation {
   tick: number;
@@ -17,8 +17,9 @@ export interface Observation {
     lastHitBy: SideIndex | null;
     bouncesSinceHit: number;
   };
-  /** The Shot type of the last swing, which a player reads from the hitter's swing. */
+  /** The Shot type and variant of the last swing, which a player reads from the hitter's swing. */
   lastShot: ShotType | null;
+  lastVariant: ShotVariant | null;
   myPos: Vec3;
   /** Whether my shot button is already pressed for this ball. */
   committed: boolean;
@@ -42,6 +43,7 @@ export function observe(s: SimState, me: SideIndex): Observation {
       bouncesSinceHit: s.ball.bouncesSinceHit,
     },
     lastShot: hitter?.swing?.type ?? null,
+    lastVariant: hitter?.swing?.variant ?? null,
     myPos: { ...self.pos },
     committed: self.commit !== null,
     opponentPos: { ...s.sides[other(me)].players[0].pos },

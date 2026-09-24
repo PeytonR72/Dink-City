@@ -11,11 +11,20 @@ import {
   TICK,
   endOf,
   netHeight,
-  type Player,
+  other,
+  predictContact,
+  predictLanding,
+  worldToLocal,
+  type End,
+  type ShotVariant,
+  type SideIndex,
+  type SimEvent,
   type SimState,
+  type SimTuning,
   type Vec3,
 } from '../sim';
 import type { ViewTuning } from '../tuning';
+import { Character } from './character';
 
 const COLORS = {
   sky: 0x8fd3ff,
@@ -29,35 +38,48 @@ const COLORS = {
   ball: 0xf4e04d,
   shadow: 0x000000,
   aim: 0xffd23f,
+  landing: 0xffd23f,
   sides: [0xff7a3d, 0x8a5cf6],
 };
 
-const SWING_SECONDS = 0.3;
 /** The Side this screen belongs to. */
 const LOCAL_SIDE = 0;
+const TRAIL_MAX = 16;
 
 interface PlayerView {
-  root: THREE.Group;
-  arm: THREE.Group;
+  character: Character;
   shadow: THREE.Mesh;
   /** Faint when committed, bright once the move input switches to aim. */
   ring: THREE.Mesh;
+  /** Where the last hit was met, in character space. */
+  lastHit: { tick: number; pos: THREE.Vector3; variant: ShotVariant } | null;
 }
+
+/** Draws extra things each frame (debug overlays). */
+export type FrameHook = (prev: SimState, curr: SimState, alpha: number) => void;
 
 export class Renderer {
   readonly camera: THREE.PerspectiveCamera;
+  /** Everything on the court. Turned 180° when the local Player is at End 1, so they always appear at the bottom. */
+  readonly world = new THREE.Group();
+  readonly hooks: FrameHook[] = [];
   private renderer: THREE.WebGLRenderer;
   private scene = new THREE.Scene();
-  /** Everything on the court. Turned 180° when the local Player is at End 1, so they always appear at the bottom. */
-  private world = new THREE.Group();
   private ball: THREE.Mesh;
   private ballShadow: THREE.Mesh;
+  private landing: THREE.Group;
+  private landingTick = -1;
+  private trail: THREE.InstancedMesh;
+  /** Ball positions of recent Ticks, newest first. */
+  private trailPoints: Vec3[] = [];
+  private trailTick = -1;
   private players: PlayerView[];
   private cameraX = 0;
 
   constructor(
     canvas: HTMLCanvasElement,
     private view: ViewTuning,
+    private sim: SimTuning,
   ) {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -81,10 +103,30 @@ export class Renderer {
     this.ballShadow = blobShadow(BALL_RADIUS * 1.6);
     this.world.add(this.ballShadow);
 
+    this.trail = new THREE.InstancedMesh(
+      new THREE.IcosahedronGeometry(BALL_RADIUS, 0),
+      new THREE.MeshBasicMaterial({ color: COLORS.ball, transparent: true, opacity: 0.35, depthWrite: false }),
+      TRAIL_MAX,
+    );
+    this.trail.frustumCulled = false;
+    this.world.add(this.trail);
+
+    this.landing = landingMarker();
+    this.world.add(this.landing);
+
     this.players = [0, 1].map((i) => this.buildPlayer(COLORS.sides[i]));
 
     this.resize();
     window.addEventListener('resize', () => this.resize());
+  }
+
+  /** Records where each hit was met, so the swing's forward stroke goes through the ball. */
+  onEvents(s: SimState, events: readonly SimEvent[]) {
+    for (const e of events) {
+      if (e.kind !== 'hit') continue;
+      const player = s.sides[e.side].players[0];
+      this.players[e.side].lastHit = { tick: s.tick, pos: toCharacter(endOf(s, e.side), player.pos, e.pos), variant: e.variant };
+    }
   }
 
   render(prev: SimState, curr: SimState, alpha: number, dt: number) {
@@ -101,20 +143,28 @@ export class Renderer {
     this.ballShadow.scale.setScalar(v.ballScale * (1 + k * 1.2));
     (this.ballShadow.material as THREE.MeshBasicMaterial).opacity = 0.55 * (1 - k * 0.75);
 
+    this.updateTrail(curr, ballPos);
+    this.updateLanding(curr, dt);
+
     for (const i of [0, 1] as const) {
-      const p = lerpVec(prev.sides[i].players[0].pos, curr.sides[i].players[0].pos, alpha);
-      const pv = this.players[i];
-      pv.root.position.set(p.x, 0, p.z);
-      pv.root.rotation.y = endOf(curr, i) === 0 ? 0 : Math.PI;
-      pv.shadow.position.set(p.x, 0.003, p.z);
+      const prevPlayer = prev.sides[i].players[0];
       const player = curr.sides[i].players[0];
-      pv.arm.rotation.y = swingAngle(player, curr.tick + alpha);
+      const p = lerpVec(prevPlayer.pos, player.pos, alpha);
+      const pv = this.players[i];
+      const end = endOf(curr, i);
+      pv.character.root.position.set(p.x, 0, p.z);
+      pv.character.root.rotation.y = end === 0 ? 0 : Math.PI;
+      pv.shadow.position.set(p.x, 0.003, p.z);
+      pv.character.update(this.pose(prev, curr, i, alpha), dt);
+
       pv.ring.position.set(p.x, 0.006, p.z);
       pv.ring.visible = i === LOCAL_SIDE && player.commit !== null;
       const ringMat = pv.ring.material as THREE.MeshBasicMaterial;
       ringMat.color.setHex(player.aiming ? COLORS.aim : COLORS.line);
       ringMat.opacity = player.aiming ? 0.95 : 0.4;
     }
+
+    for (const hook of this.hooks) hook(prev, curr, alpha);
 
     const local = curr.sides[LOCAL_SIDE].players[0].pos;
     const screenX = mirrored ? -local.x : local.x;
@@ -128,6 +178,76 @@ export class Renderer {
     this.camera.lookAt(this.cameraX, 0, v.lookAtZ);
 
     this.renderer.render(this.scene, this.camera);
+  }
+
+  /** Animation inputs for one Player, from the Sim and its predicted Contact. */
+  private pose(prev: SimState, curr: SimState, i: SideIndex, alpha: number) {
+    const end = endOf(curr, i);
+    const player = curr.sides[i].players[0];
+    const prevPos = prev.sides[i].players[0].pos;
+    const moved = curr.tick > prev.tick ? { x: (player.pos.x - prevPos.x) / TICK, z: (player.pos.z - prevPos.z) / TICK } : { x: 0, z: 0 };
+    // Teleports between points aren't walking.
+    const vel = Math.hypot(moved.x, moved.z) > 20 ? { x: 0, z: 0 } : moved;
+    const lv = toCharacter(end, { x: 0, y: 0, z: 0 }, { x: vel.x, y: 0, z: vel.z });
+
+    const predicted = player.commit ? predictContact(curr, i, this.sim) : null;
+    const hit = this.players[i].lastHit;
+    const swingSeconds = hit ? (curr.tick + alpha - hit.tick) * TICK : Infinity;
+    return {
+      velocity: { x: lv.x, z: lv.z },
+      committed: player.commit !== null,
+      contact: predicted && {
+        seconds: Math.max(0, (predicted.ticks - alpha) * TICK),
+        pos: toCharacter(end, player.pos, predicted.pos),
+        variant: predicted.variant,
+      },
+      swing: hit && swingSeconds >= 0 ? { seconds: swingSeconds, pos: hit.pos, variant: hit.variant } : null,
+    };
+  }
+
+  /** A short trail of the ball's last few Ticks, shrinking with age. */
+  private updateTrail(curr: SimState, ballPos: Vec3) {
+    const inPlay = curr.phase === 'rally' || curr.phase === 'dead';
+    if (!inPlay) this.trailPoints = [];
+    else if (curr.tick !== this.trailTick) {
+      this.trailPoints.unshift({ ...curr.ball.pos });
+      this.trailPoints.length = Math.min(this.trailPoints.length, this.view.trailLength);
+    }
+    this.trailTick = curr.tick;
+    const m = new THREE.Matrix4();
+    let n = 0;
+    const speed = Math.hypot(curr.ball.vel.x, curr.ball.vel.y, curr.ball.vel.z);
+    // Only a moving ball leaves a trail; skip the newest point, which the ball itself covers.
+    if (speed > 3) {
+      for (let j = 1; j < this.trailPoints.length && n < TRAIL_MAX; j++) {
+        const p = this.trailPoints[j];
+        if (Math.hypot(p.x - ballPos.x, p.y - ballPos.y, p.z - ballPos.z) > 3) break;
+        const scale = this.view.ballScale * (1 - j / (this.view.trailLength + 1)) * 0.9;
+        m.makeScale(scale, scale, scale).setPosition(p.x, p.y, p.z);
+        this.trail.setMatrixAt(n++, m);
+      }
+    }
+    this.trail.count = n;
+    this.trail.instanceMatrix.needsUpdate = true;
+  }
+
+  /** Marks where the opponent's shot (or Serve) will land. */
+  private updateLanding(curr: SimState, dt: number) {
+    const { ball } = curr;
+    const incoming = curr.phase === 'rally' && ball.lastHitBy === other(LOCAL_SIDE) && ball.bouncesSinceHit === 0;
+    if (!incoming) {
+      this.landing.visible = false;
+      return;
+    }
+    if (curr.tick !== this.landingTick) {
+      this.landingTick = curr.tick;
+      const at = predictLanding(ball, this.sim);
+      this.landing.visible = at !== null;
+      if (at) this.landing.position.set(at.x, 0.008, at.z);
+    }
+    this.landing.rotation.y += dt * 2;
+    const pulse = 1 + 0.08 * Math.sin(performance.now() / 90);
+    this.landing.scale.setScalar(pulse);
   }
 
   private resize() {
@@ -192,44 +312,37 @@ export class Renderer {
   }
 
   private buildPlayer(color: number): PlayerView {
-    const root = new THREE.Group();
-    const body = new THREE.MeshLambertMaterial({ color, flatShading: true });
-    const skin = new THREE.MeshLambertMaterial({ color: 0xf2c29b, flatShading: true });
-
-    const box = (w: number, h: number, d: number, mat: THREE.Material, x: number, y: number, z: number) => {
-      const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
-      m.position.set(x, y, z);
-      return m;
-    };
-    root.add(box(0.45, 0.8, 0.28, body, 0, 0.45 + 0.4, 0)); // legs + torso block
-    root.add(box(0.5, 0.55, 0.3, body, 0, 1.12, 0));
-    root.add(box(0.36, 0.36, 0.36, skin, 0, 1.6, 0));
-
-    // Right arm pivots at the shoulder; the paddle hangs off the hand.
-    const arm = new THREE.Group();
-    arm.position.set(0.3, 1.3, 0);
-    arm.add(box(0.12, 0.12, 0.55, skin, 0.05, -0.25, -0.15));
-    arm.add(box(0.2, 0.26, 0.03, new THREE.MeshLambertMaterial({ color: 0x222831 }), 0.1, -0.35, -0.5));
-    root.add(arm);
-
+    const character = new Character(color);
     const shadow = blobShadow(0.38);
     const ring = new THREE.Mesh(
       new THREE.RingGeometry(0.55, 0.66, 32),
       new THREE.MeshBasicMaterial({ color: COLORS.line, transparent: true, depthWrite: false }),
     );
     ring.rotation.x = -Math.PI / 2;
-    this.world.add(root, shadow, ring);
-    return { root, arm, shadow, ring };
+    this.world.add(character.root, shadow, ring);
+    return { character, shadow, ring, lastHit: null };
   }
 }
 
-function swingAngle(player: Player, tick: number): number {
-  const READY = 0.6;
-  if (!player.swing) return READY;
-  const t = ((tick - player.swing.tick) * TICK) / SWING_SECONDS;
-  if (t < 0 || t > 1) return READY;
-  // Fast forward swing, slower return.
-  return t < 0.35 ? READY - (t / 0.35) * 1.8 : READY - 1.8 * (1 - (t - 0.35) / 0.65);
+/** A world point relative to a Player's feet, in character space (right = +x, forward = -z). */
+function toCharacter(end: End, feet: Vec3, p: Vec3): THREE.Vector3 {
+  const l = worldToLocal(end, p.x - feet.x, p.z - feet.z);
+  return new THREE.Vector3(l.x, p.y, -l.y);
+}
+
+function landingMarker(): THREE.Group {
+  const g = new THREE.Group();
+  const m = new THREE.MeshBasicMaterial({ color: COLORS.landing, transparent: true, opacity: 0.85, depthWrite: false });
+  const ring = new THREE.Mesh(new THREE.RingGeometry(0.16, 0.22, 24), m);
+  ring.rotation.x = -Math.PI / 2;
+  g.add(ring);
+  for (const r of [0, Math.PI / 2]) {
+    const tick = new THREE.Mesh(new THREE.PlaneGeometry(0.34, 0.035), m);
+    tick.rotation.set(-Math.PI / 2, 0, r);
+    g.add(tick);
+  }
+  g.visible = false;
+  return g;
 }
 
 function blobShadow(radius: number): THREE.Mesh {

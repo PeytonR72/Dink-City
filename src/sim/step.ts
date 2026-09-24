@@ -14,17 +14,21 @@ import { integrateBall } from './physics';
 import { nextRandom } from './rng';
 import { TICK, netClearance, simulateFlight, solveShot, solveTimedShot } from './solver';
 import type {
+  Commit,
   DeadReason,
   End,
   Match,
   MatchConfig,
   Intent,
   Player,
+  QualityFactors,
   ShotTuning,
   ShotType,
+  ShotVariant,
   SideIndex,
   SimState,
   SimTuning,
+  TunedVariant,
   Vec2,
   Vec3,
 } from './types';
@@ -65,7 +69,7 @@ export function createInitialState(seed: number, config: MatchConfig = DEFAULT_M
       winner: null,
     },
     shots: 0,
-    ball: { pos: { x: 0, y: 0, z: 0 }, vel: { x: 0, y: 0, z: 0 }, spin: 0, lastHitBy: null, bouncesSinceHit: 0 },
+    ball: { pos: { x: 0, y: 0, z: 0 }, vel: { x: 0, y: 0, z: 0 }, spin: 0, lastHitBy: null, bouncesSinceHit: 0, hitTick: 0 },
     sides: [{ players: [player()] }, { players: [player()] }],
     events: [],
   };
@@ -124,7 +128,8 @@ function press(s: SimState, i: SideIndex, shot: ShotType, intent: Intent, t: Sim
     if (i === s.server && s.tick - s.phaseTick >= SERVE_DELAY_TICKS) serve(s, i, shot, intent, t);
     return;
   }
-  if (s.phase === 'rally') player.commit = { type: shot, tick: s.tick, bestDistance: null };
+  // Pressing the same button again keeps the earlier Commit (and its timing); a different one is a new, later Commit.
+  if (s.phase === 'rally' && player.commit?.type !== shot) player.commit = { type: shot, tick: s.tick, bestDistance: null };
 }
 
 function serve(s: SimState, i: SideIndex, shot: ShotType, intent: Intent, t: SimTuning) {
@@ -139,7 +144,7 @@ function serve(s: SimState, i: SideIndex, shot: ShotType, intent: Intent, t: Sim
     z: f * depthFor(tuning, intent.aim.y),
   };
   const vel = solveShot(s.ball.pos, target, tuning.apex, tuning.spin, t);
-  launch(s, i, kind, vel, tuning.spin);
+  launch(s, i, kind, 'serve', vel, tuning.spin);
   s.phase = 'rally';
   s.phaseTick = s.tick;
 }
@@ -170,7 +175,7 @@ function checkContact(s: SimState, intents: readonly [Intent, Intent], t: SimTun
     const volley = ball.bouncesSinceHit === 0;
     // The Serve and the return of serve must both bounce (Two-bounce rule).
     const mustBounce = s.shots < 3;
-    hit(s, i, player.commit.type, d, intents[i].aim, t, random);
+    hit(s, i, player.commit, d, intents[i].aim, t, random);
     if (volley && mustBounce) die(s, 'two-bounce', i);
     else if (volley && inKitchen(player, t)) die(s, 'kitchen', i);
     return;
@@ -186,7 +191,7 @@ function inKitchen(player: Player, t: SimTuning): boolean {
  * Normalized distance (0 = sweet spot, 1 = edge of reach) from the Player's
  * sweet spot to a ball position, or null when out of reach.
  */
-function sweetSpotDistance(player: Player, end: End, pos: Vec3, t: SimTuning): number | null {
+export function sweetSpotDistance(player: Player, end: End, pos: Vec3, t: SimTuning): number | null {
   if (pos.y > t.reachHeight) return null;
   const l = worldToLocal(end, pos.x - player.pos.x, pos.z - player.pos.z);
   if (Math.hypot(l.x / t.reachSide, l.y / (l.y >= 0 ? t.reachForward : t.reachBack)) > 1) return null;
@@ -198,68 +203,97 @@ function sweetSpotDistance(player: Player, end: End, pos: Vec3, t: SimTuning): n
   return Math.min(1, Math.hypot(dx, dy));
 }
 
-function qualityAt(distance: number, t: SimTuning): number {
-  if (distance <= t.sweetRadius) return 1;
-  const k = (distance - t.sweetRadius) / (1 - t.sweetRadius);
-  return 1 + (t.edgeQuality - 1) * k;
+/** Linear from 1 at k = 0 down to `floor` at k = 1 (k is clamped). */
+function falloff(k: number, floor: number): number {
+  return 1 + (floor - 1) * clamp(k, 0, 1);
+}
+
+/** Soft becomes a Dink, Drop or Block from context. A Smash is decided in `hit`, since it can fall back to a Drive. */
+export function variantOf(type: ShotType, pos: Vec3, pace: number, t: SimTuning): TunedVariant {
+  if (type !== 'soft') return type;
+  if (pace >= t.blockSpeed) return 'block';
+  return Math.abs(pos.z) - KITCHEN_DEPTH <= t.dinkZone ? 'dink' : 'drop';
+}
+
+/** The Shot quality inputs (ADR-0002). Movement at Contact acts through Aim error instead. */
+function qualityFactors(s: SimState, commit: Commit, distance: number, pace: number, variant: TunedVariant, t: SimTuning): QualityFactors {
+  const { ball } = s;
+  // Commit timing is a fraction of the flight, so fast exchanges aren't punished twice (pace covers them).
+  const flight = Math.max(1, s.tick - ball.hitTick);
+  const pressedAt = (commit.tick - ball.hitTick) / flight;
+  return {
+    set: distance <= t.sweetRadius ? 1 : falloff((distance - t.sweetRadius) / (1 - t.sweetRadius), t.edgeQuality),
+    timing: falloff((pressedAt - t.commitFullFraction) / (t.commitRushedFraction - t.commitFullFraction), t.rushedQuality),
+    height: falloff((t.lowContactHeight - ball.pos.y) / (t.lowContactHeight - BALL_RADIUS), t.lowContactQuality),
+    // A Block is the answer to pace, so it ignores it.
+    pace: variant === 'block' ? 1 : falloff((pace - t.paceStart) / (t.paceFull - t.paceStart), t.paceQuality),
+  };
 }
 
 /**
  * `distance` is how far from the sweet spot the ball was met (0 = dead center,
  * 1 = edge of reach).
  */
-function hit(s: SimState, i: SideIndex, type: ShotType, distance: number, aim: Vec2, t: SimTuning, random: () => number) {
+function hit(s: SimState, i: SideIndex, commit: Commit, distance: number, aim: Vec2, t: SimTuning, random: () => number) {
   const { ball } = s;
   const player = s.sides[i].players[0];
-  const tuning = t.shots[type];
-  const quality = qualityAt(distance, t);
+  const type = commit.type;
+  const pace = length(ball.vel);
+  const base = variantOf(type, ball.pos, pace, t);
+  let variant: ShotVariant = base;
+  const tuning = t.shots[base];
+  const factors = qualityFactors(s, commit, distance, pace, base, t);
+  const quality = factors.set * factors.timing * factors.height * factors.pace;
   const weak = 1 - quality;
   const end = endOf(s, i);
   const lateral = localToWorld(end, clamp(aim.x, -1, 1) * tuning.width, 0).x;
   let depth = Math.max(0.5, depthFor(tuning, aim.y) - weak * tuning.weakDepth);
   const target = { x: clamp(lateral, -HALF_WIDTH + 0.15, HALF_WIDTH - 0.15), z: 0 };
 
-  // Moving at Contact: a random miss that grows with speed. Applied after the
-  // in-court clamp, so a shot on the run aimed near a line can go out.
+  // A random miss from moving at Contact, plus a smaller one from poor quality
+  // (squared, so only a poor shot sprays). Applied after the in-court clamp, so
+  // a shot on the run aimed near a line can go out.
   const running = Math.min(1, player.speed / t.playerSpeed);
-  const spread = t.moveAimError * running;
+  const spread = t.moveAimError * running + t.qualityAimError * weak * weak;
   target.x += (random() + random() - 1) * spread;
   depth += (random() + random() - 1) * spread;
 
   // A Soft shot from behind the Kitchen is easy to hit too hard: only a
-  // dead-center, set contact keeps it short.
-  if (type === 'soft') {
+  // dead-center, set contact keeps it short. A Block just absorbs the pace.
+  if (variant === 'dink' || variant === 'drop') {
     const beyond = Math.max(0, Math.abs(ball.pos.z) - KITCHEN_DEPTH);
     const offCenter = clamp((distance - t.softPerfectRadius) / (t.sweetRadius - t.softPerfectRadius), 0, 1);
     depth += t.softOverhit * beyond * Math.max(offCenter, running) * (0.5 + random());
   }
   target.z = facing(end) * Math.max(0.3, depth);
 
-  let smash = false;
   let vel: Vec3 | null = null;
-  if (type === 'drive' && ball.pos.y >= t.smashHeight) {
+  if (variant === 'drive' && ball.pos.y >= t.smashHeight) {
     const speed = t.smashSpeed * (0.6 + 0.4 * quality);
     const v = solveTimedShot(ball.pos, target, speed, tuning.spin, t);
     // A smash from too deep would go into the net; fall back to a normal Drive.
     if (netClearance(simulateFlight(ball.pos, v, tuning.spin, t)) > 0.05) {
       vel = v;
-      smash = true;
+      variant = 'smash';
     }
   }
   if (!vel) {
     const apex = tuning.apex + tuning.apexPerMeter * Math.abs(ball.pos.z) + weak * tuning.weakApex;
     vel = solveShot(ball.pos, target, apex, tuning.spin, t);
   }
-  launch(s, i, type, vel, tuning.spin, { smash, quality });
+  launch(s, i, type, variant, vel, tuning.spin, { volley: ball.bouncesSinceHit === 0, quality, factors });
 }
+
+const SERVE_INFO = { volley: false, quality: 1, factors: { set: 1, timing: 1, height: 1, pace: 1 } };
 
 function launch(
   s: SimState,
   i: SideIndex,
   type: ShotType,
+  variant: ShotVariant,
   vel: Vec3,
   spin: number,
-  info: { smash: boolean; quality: number } = { smash: false, quality: 1 },
+  info: { volley: boolean; quality: number; factors: QualityFactors } = SERVE_INFO,
 ) {
   const { ball } = s;
   const player = s.sides[i].players[0];
@@ -267,11 +301,12 @@ function launch(
   ball.spin = spin;
   ball.lastHitBy = i;
   ball.bouncesSinceHit = 0;
+  ball.hitTick = s.tick;
   s.shots++;
   player.commit = null;
   player.aiming = false;
-  player.swing = { type, tick: s.tick };
-  s.events.push({ kind: 'hit', side: i, type, ...info, pos: { ...ball.pos }, speed: length(ball.vel) });
+  player.swing = { type, variant, tick: s.tick };
+  s.events.push({ kind: 'hit', side: i, type, variant, ...info, pos: { ...ball.pos }, speed: length(ball.vel) });
 }
 
 function onBounce(s: SimState, pos: Vec3) {
@@ -435,6 +470,7 @@ function setUpServe(s: SimState) {
   s.ball.spin = 0;
   s.ball.lastHitBy = null;
   s.ball.bouncesSinceHit = 0;
+  s.ball.hitTick = s.tick;
   holdBall(s);
 }
 

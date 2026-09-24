@@ -23,7 +23,7 @@ function botGame(seed: number, difficulty: Difficulty = DIFFICULTY.medium) {
 }
 
 const game = botGame(2026);
-const GOLDEN = { points: [17, 15], tick: 62963 };
+const GOLDEN = { points: [14, 12], tick: 57041 };
 const deads = game.events.filter((e) => e.kind === 'dead');
 
 describe('Bot-vs-Bot Game', () => {

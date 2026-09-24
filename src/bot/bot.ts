@@ -48,6 +48,19 @@ export const NEUTRAL: ShotWeights = { soft: 1, drive: 1, lob: 1 };
 
 export interface Bot {
   think(obs: Observation): Intent;
+  /** What the Bot is trying to do, for the debug overlay. Updated by `think`. */
+  readonly plan: BotPlan;
+}
+
+export interface BotPlan {
+  /** Where the Bot is heading. */
+  spot: { x: number; z: number } | null;
+  /** Where it plans to meet the ball, by its own (noisy) read. */
+  contact: Vec3 | null;
+  /** The Shot type it committed to for this ball. */
+  shot: ShotType | null;
+  /** It reads the ball as going out and will let it go. */
+  leave: boolean;
 }
 
 const SERVE_WAIT_TICKS = [40, 80] as const;
@@ -55,7 +68,9 @@ const PREDICT_TICKS = 150;
 /** Stand this far behind the Kitchen line at the net. */
 const NET_GAP = 0.3;
 /** Commit to a volley when contact is this close. */
-const VOLLEY_COMMIT_TICKS = 30;
+const VOLLEY_COMMIT_TICKS = 60;
+/** Before an early groundstroke Commit, the ball must stay this far beyond reach until it bounces. */
+const COMMIT_MARGIN = 0.2;
 /** How far from the net a disciplined Bot keeps its feet when volleying. */
 function kitchenEdge(t: SimTuning): number {
   return KITCHEN_DEPTH + t.footRadius + 0.08;
@@ -104,9 +119,12 @@ export function createBot(
   let servePhase = -1;
   let serveAt = 0;
   let lastSpot: { x: number; z: number } | null = null;
+  const shown: BotPlan = { spot: null, contact: null, shot: null, leave: false };
 
   return {
+    plan: shown,
     think(o) {
+      shown.contact = null;
       const idle: Intent = { move: { x: 0, y: 0 }, aim, shot: null };
 
       if (o.phase === 'serve') {
@@ -144,17 +162,24 @@ export function createBot(
           leave = true;
         }
       }
+      shown.leave = leave;
       if (leave) return moveTo(o, readySpot(o), null);
 
       const plan = planContact(o, path);
       if (!plan) return moveTo(o, readySpot(o), null);
+      shown.contact = plan.contact.pos;
 
       let shot: ShotType | null = null;
       const volley = plan.contact.bounces === 0;
-      const ready = volley ? plan.contact.tick <= VOLLEY_COMMIT_TICKS : o.ball.bouncesSinceHit >= 1;
+      // Commit early for Shot quality, unless the ball passes close before it bounces (it could be volleyed by
+      // accident). While the Two-bounce rule applies, a disciplined Bot allows for its own misread too.
+      const mustBounce = o.shots < 3 && disciplined;
+      const early = clearUntilBounce(o, path, plan, COMMIT_MARGIN + (mustBounce ? difficulty.predictionError + 0.3 : 0));
+      const ready = volley ? plan.contact.tick <= VOLLEY_COMMIT_TICKS : o.ball.bouncesSinceHit >= 1 || early;
       if (!o.committed && ready) {
         shot = chooseShot(o, plan);
         aim = chooseAim(o, shot);
+        shown.shot = shot;
       }
       // Committed with the ball still in the air: any contact is a Volley, so stay behind the Kitchen line.
       const spot = { ...plan.spot };
@@ -168,8 +193,7 @@ export function createBot(
 
   /** The ball's path from now, with the Bot's own read of spin and its prediction error. */
   function predict(o: Observation): PathPoint[] {
-    const spin = o.lastShot ? (o.shots === 1 && o.lastShot !== 'lob' ? t.serves[o.lastShot] : t.shots[o.lastShot]).spin : 0;
-    const ball: Ball = { pos: { ...o.ball.pos }, vel: { ...o.ball.vel }, spin, lastHitBy: null, bouncesSinceHit: 0 };
+    const ball: Ball = { pos: { ...o.ball.pos }, vel: { ...o.ball.vel }, spin: spinOf(o), lastHitBy: null, bouncesSinceHit: 0, hitTick: 0 };
     const path: PathPoint[] = [];
     let bounces = o.ball.bouncesSinceHit;
     for (let k = 1; k <= PREDICT_TICKS && bounces < 2; k++) {
@@ -181,6 +205,24 @@ export function createBot(
       path.push({ tick: k, pos: { x: ball.pos.x + error.x * errorShare, y: ball.pos.y, z: ball.pos.z + error.z * errorShare }, bounces, falling });
     }
     return path;
+  }
+
+  /** The ball stays out of reach (and assist range) of both where I am and where I'm going until it bounces. */
+  function clearUntilBounce(o: Observation, path: PathPoint[], plan: Plan, margin: number): boolean {
+    const danger = t.reachForward + margin;
+    for (const p of path) {
+      if (p.bounces > 0 || p.tick >= plan.contact.tick) break;
+      if (p.pos.y > t.reachHeight + 0.5) continue;
+      for (const q of [o.myPos, plan.spot]) if (Math.hypot(p.pos.x - q.x, p.pos.z - q.z) < danger) return false;
+    }
+    return true;
+  }
+
+  function spinOf(o: Observation): number {
+    const v = o.lastVariant;
+    if (!v) return 0;
+    if (v === 'serve') return t.serves[o.lastShot === 'drive' ? 'drive' : 'soft'].spin;
+    return t.shots[v === 'smash' ? 'drive' : v].spin;
   }
 
   function planContact(o: Observation, path: PathPoint[]): Plan | null {
@@ -226,6 +268,8 @@ export function createBot(
 
   function moveTo(o: Observation, spot: { x: number; z: number }, shot: ShotType | null): Intent {
     lastSpot = spot;
+    shown.spot = spot;
+    if (!o.committed && !shot) shown.shot = null;
     const l = worldToLocal(o.myEnd, spot.x - o.myPos.x, spot.z - o.myPos.z);
     const d = Math.hypot(l.x, l.y);
     // Brake in time to stop on the spot (v² = 2ad, with some margin), so the Bot doesn't overshoot.

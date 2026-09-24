@@ -31,7 +31,7 @@ describe('sim boundary', () => {
 
 describe('ball physics', () => {
   it('bounces a drop from 78 in to 30–34 in (USA Pickleball spec)', () => {
-    const ball = { pos: { x: 0, y: 1.981, z: 3 }, vel: { x: 0, y: 0, z: 0 }, spin: 0, lastHitBy: null, bouncesSinceHit: 0 };
+    const ball = { pos: { x: 0, y: 1.981, z: 3 }, vel: { x: 0, y: 0, z: 0 }, spin: 0, lastHitBy: null, bouncesSinceHit: 0, hitTick: 0 };
     let bounced = false;
     let peak = 0;
     for (let i = 0; i < 180; i++) {
@@ -46,8 +46,9 @@ describe('ball physics', () => {
 
 describe('shot solver', () => {
   const cases = [
-    { name: 'dink from the kitchen line', from: { x: 0.5, y: 0.35, z: 2.3 }, type: 'soft' as const, depth: 1.2 },
-    { name: 'drop from the baseline', from: { x: -1, y: 0.6, z: 6.5 }, type: 'soft' as const, depth: 1.6 },
+    { name: 'dink from the kitchen line', from: { x: 0.5, y: 0.35, z: 2.3 }, type: 'dink' as const, depth: 1.2 },
+    { name: 'drop from the baseline', from: { x: -1, y: 0.6, z: 6.5 }, type: 'drop' as const, depth: 1.6 },
+    { name: 'block at the kitchen line', from: { x: 0.3, y: 0.9, z: 2.4 }, type: 'block' as const, depth: 1.0 },
     { name: 'drive from the baseline', from: { x: 1.2, y: 0.8, z: 6.6 }, type: 'drive' as const, depth: 5.2 },
     { name: 'drive from midcourt', from: { x: 0, y: 0.9, z: 4 }, type: 'drive' as const, depth: 5.8 },
     { name: 'lob from the kitchen line', from: { x: -0.5, y: 0.5, z: 2.2 }, type: 'lob' as const, depth: 5.6 },
@@ -73,17 +74,21 @@ describe('shot solver', () => {
 });
 
 describe('contact', () => {
-  /** Side 0 Player at (0, 4) facing -z, Side 1 just hit the ball. Local forward = -z, right = +x. */
+  /**
+   * Side 0 Player at (0, 4) facing -z, committed early to a Drive; Side 1 hit
+   * the ball a second ago. Local forward = -z, right = +x.
+   */
   function rallyWithBall(pos: { x: number; y: number; z: number }, vel = { x: 0, y: 0, z: 0 }): SimState {
     const s = structuredClone(createInitialState(3));
     s.phase = 'rally';
+    s.tick = 100;
     s.sides[0].players[0].pos = { x: 0, y: 0, z: 4 };
-    s.ball = { pos, vel, spin: 0, lastHitBy: 1, bouncesSinceHit: 1 };
+    s.sides[0].players[0].commit = { type: 'drive', tick: 50, bestDistance: null };
+    s.ball = { pos, vel, spin: 0, lastHitBy: 1, bouncesSinceHit: 1, hitTick: 40 };
     return s;
   }
-  const commitDrive: Intent = { ...idle, shot: 'drive' };
   const hitIn = (s: SimState, ticks = 1) => {
-    s = step(s, [commitDrive, idle], t);
+    s = step(s, [idle, idle], t);
     for (let i = 0; i < ticks; i++) {
       const hit = s.events.find((e) => e.kind === 'hit');
       if (hit?.kind === 'hit') return hit;
@@ -117,7 +122,7 @@ describe('contact', () => {
   it('turns a Drive on a high ball into a faster Smash', () => {
     const drive = hitIn(rallyWithBall({ x: 0.2, y: 0.9, z: 3.55 }));
     const smash = hitIn(rallyWithBall({ x: 0.2, y: 2.0, z: 3.55 }));
-    expect(smash?.smash).toBe(true);
+    expect(smash?.variant).toBe('smash');
     expect(smash!.speed).toBeGreaterThan(drive!.speed * 1.15);
   });
 });
