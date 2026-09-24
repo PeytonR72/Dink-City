@@ -16,3 +16,16 @@ The complete v1 meta-game around matches.
 - Practice mode: a ball machine that feeds shots through the Intent interface, with step-by-step prompts that teach the Two-bounce rule and Kitchen faults.
 - Fault Replay: a short playback from recorded Intents after each Fault.
 - Settings: rally scoring, best-of-3, and the Bot Difficulty.
+
+## Comments
+
+### 2026-09-24: decisions (agreed with the user before building)
+
+- **Slices, one commit each:** 1) Fault Replay + Settings, 2) Personalities, 3) map menu, Venue switching, colors, 4) Rooftop and Beach art and ambience, 5) Practice mode.
+- **Fault Replay:** the last 2.5 s before the Fault, at 0.5× speed, under the Fault banner, with a "REPLAY" tag. Any shot button skips it. Same camera.
+- **Unlocks:** winning a Match at any Difficulty unlocks the next Venue. The map shows a star per Difficulty beaten at each Venue.
+- **Settings:** a panel on the menu, saved in localStorage. URL flags (`?rally`, `?bo3`, `?bot=`, `?sunset`) stay as dev overrides. Esc in a Match opens a pause menu (Resume / Quit to map).
+- **Venues:** Park = Dinker; Rooftop (skyline, water tanks, AC units, chain-link fence) = Banger; Beach (sand, palms, sea, huts) = Lobber. Each has day and sunset lighting.
+- **Personality strength:** shot weights plus one or two fitting Difficulty tweaks, checked with Bot-vs-Bot stats.
+- **Practice mode:** the ball machine is Side 1, an Intent-only Side, with no scoring. Steps: 1) let the Serve bounce and return it, 2) let the third shot bounce before volleying, 3) volley from behind the Kitchen line, 4) dink from the Kitchen after a bounce, 5) free rally. Three good reps pass a step; a Fault shows why, with the Replay.
+- **Colors:** a locker panel with a live 3D preview and 8 swatches each for shirt, shorts, paddle, skin and hair. Each Venue's Bot has its own fixed look.

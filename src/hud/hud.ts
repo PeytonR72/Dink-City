@@ -5,6 +5,8 @@ import { faultText } from './faultText';
 
 const NAMES = ['YOU', 'BOT'] as const;
 const BANNER_SECONDS = 2.2;
+/** The banner lingers this long after a Replay. */
+const AFTER_REPLAY_SECONDS = 0.6;
 
 export class Hud {
   private rows: HTMLElement[];
@@ -12,6 +14,9 @@ export class Hud {
   private callout: HTMLElement;
   private detail: HTMLElement;
   private shoutEl: HTMLElement;
+  private replayTag: HTMLElement;
+  /** A Replay is playing: the Fault banner stays up. */
+  private replaying = false;
   private bannerTimer = 0;
   private sticky = false;
 
@@ -26,7 +31,7 @@ export class Hud {
         <div class="row"><span class="serve">●</span><span class="name"></span><span class="points"></span></div>
         <div id="games"></div>
       </div>
-      <div id="banner"><div id="callout"></div><div id="detail"></div></div>
+      <div id="banner"><div id="callout"></div><div id="detail"></div><div id="replay-tag">REPLAY · J / K / L to skip</div></div>
       <div id="shout"></div>`,
     );
     this.rows = [...root.querySelectorAll<HTMLElement>('#scoreboard .row')];
@@ -34,6 +39,7 @@ export class Hud {
     this.callout = root.querySelector('#callout')!;
     this.detail = root.querySelector('#detail')!;
     this.shoutEl = root.querySelector('#shout')!;
+    this.replayTag = root.querySelector('#replay-tag')!;
   }
 
   /** Local Player's row first. */
@@ -51,7 +57,7 @@ export class Hud {
     const { games, config } = s.match;
     this.games.textContent = config.bestOf > 1 ? `Games ${games[this.order()[0]]}–${games[this.order()[1]]}` : '';
 
-    if (this.sticky) return;
+    if (this.sticky || this.replaying) return;
     this.bannerTimer -= dt;
     if (this.bannerTimer <= 0) this.show('', '');
   }
@@ -71,14 +77,22 @@ export class Hud {
         // Best of 3 reports Games won; a single Game reports its points.
         const tally = s.match.config.bestOf > 1 ? s.match.games : s.match.points;
         const [a, b] = this.order().map((side) => tally[side]);
-        this.show(e.winner === this.local ? 'YOU WIN' : 'BOT WINS', `${a}–${b}. Press J, K or L to play again.`);
+        this.show(e.winner === this.local ? 'YOU WIN' : 'BOT WINS', `${a}–${b}. Press J, K or L to play again, or Esc for the menu.`);
         this.sticky = true;
       }
     }
   }
 
+  /** Holds the Fault banner up, tagged REPLAY, while a Replay plays. */
+  setReplay(on: boolean) {
+    this.replaying = on;
+    this.replayTag.classList.toggle('show', on);
+    if (!on) this.bannerTimer = AFTER_REPLAY_SECONDS;
+  }
+
   reset() {
     this.sticky = false;
+    this.setReplay(false);
     this.show('', '');
   }
 

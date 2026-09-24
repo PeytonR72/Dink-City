@@ -74,6 +74,10 @@ export const viewTuning = {
   /** Presentation-only pause on hard hits: a Smash, or any hit leaving at least `hitStopSpeed` m/s. */
   hitStopMs: 40,
   hitStopSpeed: 16,
+  /** Fault Replay: this many seconds before the Fault, played at `replaySpeed`, starting `replayDelay` s after it. */
+  replaySeconds: 2.5,
+  replaySpeed: 0.5,
+  replayDelay: 0.6,
   /** Master volume for sound effects, 0–1. */
   volume: 0.5,
   /** Venue ambience loudness, relative to `volume`. */

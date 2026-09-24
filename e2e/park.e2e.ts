@@ -7,7 +7,7 @@ interface Dink {
 
 /** Opens the game and waits until the Park is on screen and the camera has settled. */
 async function openPark(page: Page, query = '') {
-  await page.goto(`/${query}`);
+  await page.goto(`/?play${query}`);
   await page.waitForFunction(() => 'dink' in window && (window as unknown as { dink: Dink }).dink.stats.calls > 0);
   // The camera follow is damped; give it time to come to rest before comparing pixels.
   await page.waitForTimeout(1500);
@@ -19,7 +19,7 @@ test('the Park Venue matches its reference screenshot', async ({ page }) => {
 });
 
 test('the Park at sunset matches its reference screenshot', async ({ page }) => {
-  await openPark(page, '?sunset');
+  await openPark(page, '&sunset');
   await expect(page).toHaveScreenshot('park-sunset.png', { maxDiffPixelRatio: 0.02 });
 });
 
@@ -46,4 +46,12 @@ test('the Park stays within the performance budget during a Rally', async ({ pag
   // Spec budget: under about 150 draw calls and 50k triangles.
   expect(stats.calls).toBeLessThan(150);
   expect(stats.triangles).toBeLessThan(50_000);
+});
+
+test('the menu opens first, and Play starts a Match', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.getByRole('heading', { name: 'Dink City' })).toBeVisible();
+  await page.getByRole('button', { name: 'Play' }).click();
+  await expect(page.locator('#menu')).toBeHidden();
+  await expect(page.locator('#scoreboard')).toBeVisible();
 });

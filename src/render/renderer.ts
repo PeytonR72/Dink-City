@@ -129,6 +129,11 @@ export class Renderer {
     return { calls, triangles };
   }
 
+  /** A cut to another moment (into or out of a Replay): drops the ball trail, which would streak across the jump. */
+  cut() {
+    this.trailPoints = [];
+  }
+
   /** Records where each hit was met, so the swing's forward stroke goes through the ball. */
   onEvents(s: SimState, events: readonly SimEvent[]) {
     for (const e of events) {

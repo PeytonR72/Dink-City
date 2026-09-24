@@ -136,3 +136,124 @@ body {
   font-size: 14px;
   font-weight: 600;
 }
+
+#replay-tag {
+  display: inline-block;
+  margin-top: 10px;
+  padding: 3px 10px;
+  border-radius: 6px;
+  background: rgba(20, 30, 50, 0.55);
+  font-size: 14px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  visibility: hidden;
+}
+
+#replay-tag.show {
+  visibility: visible;
+}
+
+body[data-mode='menu'] #hud,
+body[data-mode='paused'] #scoreboard {
+  display: none;
+}
+
+/* Menus: plain DOM over the canvas. */
+.overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 16px;
+  background: rgba(20, 30, 50, 0.45);
+  color: #fff;
+  text-shadow: 0 2px 0 rgba(0, 0, 0, 0.35);
+}
+
+.overlay[hidden] {
+  display: none;
+}
+
+.overlay h1 {
+  margin: 0 0 8px;
+  font-size: clamp(40px, 9vw, 84px);
+  font-weight: 900;
+  font-style: italic;
+  letter-spacing: 0.02em;
+  color: #ffd23f;
+  -webkit-text-stroke: 3px #1d2433;
+  text-shadow: 0 6px 0 #1d2433;
+}
+
+.overlay h2 {
+  margin: 16px 0 0;
+  font-size: 18px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.overlay button {
+  min-width: 200px;
+  padding: 10px 22px;
+  border: 3px solid #1d2433;
+  border-radius: 12px;
+  background: #fff;
+  color: #1d2433;
+  font: inherit;
+  font-size: 20px;
+  font-weight: 800;
+  cursor: pointer;
+  box-shadow: 0 4px 0 #1d2433;
+}
+
+.overlay button.primary {
+  background: #ff7a3d;
+  color: #fff;
+  text-shadow: 0 2px 0 rgba(0, 0, 0, 0.3);
+}
+
+.overlay button:hover,
+.overlay button:focus-visible {
+  outline: none;
+  transform: translateY(-2px);
+  box-shadow: 0 6px 0 #1d2433;
+}
+
+.settings {
+  display: grid;
+  gap: 8px;
+  padding: 12px 16px;
+  border-radius: 14px;
+  background: rgba(20, 30, 50, 0.5);
+}
+
+.setting {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.setting .label {
+  min-width: 64px;
+  font-weight: 800;
+}
+
+.setting .options {
+  display: flex;
+  gap: 6px;
+}
+
+.overlay .setting button {
+  min-width: 0;
+  padding: 5px 12px;
+  font-size: 15px;
+  box-shadow: 0 3px 0 #1d2433;
+}
+
+.overlay .setting button[aria-checked='true'] {
+  background: #ffd23f;
+}
