@@ -240,6 +240,10 @@ if (import.meta.env.DEV && params.has('debug')) {
   get stats() {
     return renderer.stats;
   },
+  /** Draw calls and triangles of the map's last frame. */
+  get mapStats() {
+    return map.stats;
+  },
   /** Step N Ticks synchronously (works while the tab is hidden). `drive` overrides local input. */
   advance(ticks: number, drive?: (s: SimState) => Intent) {
     for (let i = 0; i < ticks; i++) tick(drive?.(curr));
@@ -354,8 +358,11 @@ function update(dt: number) {
     else if (mode === 'locker') setMode('menu');
   }
 
-  if (mode !== 'match') {
-    // The court sits still behind the menus.
+  if (mode === 'menu') {
+    // The map is drawn instead of the court, which keeps its last frame behind the menu.
+    map.draw(dt);
+  } else if (mode !== 'match') {
+    // The court sits still behind the other menus.
     renderer.render(prev, curr, 1, dt);
   } else if (!playReplay(dt)) {
     if (hitStop > 0) hitStop -= dt;

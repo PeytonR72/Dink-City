@@ -2,6 +2,7 @@ import { expect, test, type Page } from '@playwright/test';
 
 interface Dink {
   stats: { calls: number; triangles: number };
+  mapStats: { calls: number; triangles: number };
   advance(ticks: number, drive?: unknown): unknown;
   newMatch(seed: number): void;
   eventLog: { kind: string; reason?: string; loser?: number }[];
@@ -55,6 +56,25 @@ for (const venue of VENUES) {
     expect(stats.triangles).toBeLessThan(50_000);
   });
 }
+
+/** Opens the map and waits until it has drawn. */
+async function openMap(page: Page) {
+  await page.goto('/');
+  await page.waitForFunction(() => 'dink' in window && (window as unknown as { dink: Dink }).dink.mapStats.calls > 0);
+}
+
+test('the map matches its reference screenshot', async ({ page }) => {
+  await openMap(page);
+  await expect(page.locator('.city-map')).toHaveScreenshot('map.png', { maxDiffPixelRatio: 0.02 });
+});
+
+test('the map stays within the performance budget', async ({ page }) => {
+  await openMap(page);
+  const stats = await page.evaluate(() => (window as unknown as { dink: Dink }).dink.mapStats);
+  console.log(`map budget: ${stats.calls} draw calls, ${stats.triangles} triangles`);
+  expect(stats.calls).toBeLessThan(150);
+  expect(stats.triangles).toBeLessThan(50_000);
+});
 
 test('the map opens first, with only the Park open, and the Park starts a Match', async ({ page }) => {
   await page.goto('/');

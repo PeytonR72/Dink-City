@@ -333,14 +333,16 @@ body[data-mode='locker'] #hud {
   border: 4px solid #1d2433;
   border-radius: 18px;
   box-shadow: 0 6px 0 #1d2433;
+  background: radial-gradient(ellipse at 50% 35%, #e4f5fc, #a8dcf2);
 }
 
-.city-map svg {
+.city-map canvas {
   display: block;
   width: 100%;
   height: 100%;
 }
 
+/* A pin stands above the spot it points at, with a tail down to it. */
 .overlay .pin {
   position: absolute;
   display: flex;
@@ -350,14 +352,25 @@ body[data-mode='locker'] #hud {
   min-width: 0;
   width: 190px;
   padding: 6px 10px;
-  transform: translate(-50%, -50%);
+  transform: translate(-50%, calc(-100% - 10px));
   font-size: 18px;
   line-height: 1.15;
 }
 
+.overlay .pin::after {
+  content: '';
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  margin-top: 3px;
+  border: 9px solid transparent;
+  border-top-color: #1d2433;
+  transform: translateX(-50%);
+}
+
 .overlay .pin:hover,
 .overlay .pin:focus-visible {
-  transform: translate(-50%, calc(-50% - 2px));
+  transform: translate(-50%, calc(-100% - 12px));
 }
 
 .pin-stars {
