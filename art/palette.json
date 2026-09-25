@@ -115,7 +115,11 @@
     "boardDark": "#96673f",
     "pavement": "#d8d2c6",
     "grass": "#7cc05a",
-    "grassDark": "#69ad4c",
-    "sea": "#2a8fb8"
+    "sea": "#2a8fb8",
+    "sidewalk": "#bdc6ee",
+    "gutter": "#515566",
+    "asphalt": "#666b80",
+    "roadLine": "#8e95b3",
+    "hedge": "#3f8a3a"
   }
 }

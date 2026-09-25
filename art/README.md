@@ -25,7 +25,7 @@ Each model script renders a workbench preview (vertex colors, studio light) to `
 | `park.py` | `models/park.glb` | The Park Venue's surroundings, as one mesh. Its preview is the whole Venue from the game camera. |
 | `rooftop.py` | `models/rooftop.glb` | The Rooftop: a roof deck, a chain-link fence, water tanks and AC units over a city skyline. |
 | `beach.py` | `models/beach.glb` | The Beach: sand, the sea along one side, palms, beach huts, umbrellas and a rope fence. |
-| `map.py` | `models/map.glb` | The Dink City map: a tabletop diorama with the three Venues in miniature, built with the Venues' own helpers, among Kenney's CC0 buildings and roads (`vendor/kenney/`). Three meshes: `map`, `sway` (trees and palms) and `water`, plus `pin_<venue>` empties where the pins point. |
+| `map.py` | `models/map.glb` | The Dink City map: a tabletop diorama with the three Venues in miniature, built with the Venues' own helpers, among Kenney's CC0 buildings (`vendor/kenney/`). Three meshes: `map`, `sway` (trees and palms) and `water`, plus `pin_<venue>` empties where the pins point. |
 | `ambience.py` | `audio/<venue>-ambience.ogg` | A 24 s seamless loop per Venue, synthesized in Python: breeze, leaves and birds (Park); city rumble, AC hum, horns and pigeons (Rooftop); waves and gulls (Beach). They're CC0 because they're made here from nothing. |
 
 ## Conventions

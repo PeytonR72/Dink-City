@@ -1,7 +1,8 @@
 """The Dink City map: a tabletop diorama of the city with the three Venues in miniature -> art/models/map.glb.
 
-Kenney's City Kit buildings and roads fill the city (see art/vendor/kenney/); the Venues are built with their own
-scripts' helpers: the Park's trees, the Rooftop's chain-link fence and AC units, the Beach's palms and umbrellas.
+Kenney's City Kit buildings fill the city (see art/vendor/kenney/), along roads built here in the colors of Kenney's
+road tiles, which end in turning circles at the Park and the Beach. The Venues are built with their own scripts'
+helpers: the Park's trees, the Rooftop's chain-link fence and AC units, the Beach's palms and umbrellas.
 Everything is authored in meters, like the Venues, and shrunk 1:10 on export, so the board is 14 x 8 units.
 
 Three meshes, so the game can animate two of them cheaply (see src/menu/mapView.ts): `map` (everything still),
@@ -36,12 +37,19 @@ BOARD_DEPTH = 5.0
 PARK = (-51.0, 14.0)
 ROOFTOP = (3.0, -21.0)
 ROOF_TOP = 18.0
-BEACH = (46.0, 12.0)
+BEACH = (47.0, 12.0)
 # The zones: the Park on the left, the Beach and the sea on the right, the city between, a lawn in front of it.
 CITY_X = (-32.0, 38.0)
-LAWN_Z = 14.0
 AVENUE_Z = 8.0
 STREETS_X = (-17.0, 23.0)
+# A road's half widths: its sidewalk's outer edge, its gutter's, its asphalt's. Each end of the avenue is a turning
+# circle whose sidewalk meets the city's edge.
+ROAD = (4.0, 3.0, 2.4)
+TURN = (5.0, 4.0, 3.4)
+AVENUE_ENDS = (CITY_X[0] + TURN[0], CITY_X[1] - TURN[0])
+LAWN_Z = AVENUE_Z + ROAD[0]
+# The boardwalk between the city and the sand.
+BOARDWALK_X = (CITY_X[1], CITY_X[1] + 2.0)
 GROUND = 0.07
 # The sea's surface: high enough that its swell (up to 0.08 either way, see src/menu/mapView.ts) never shows the
 # board under it.
@@ -143,15 +151,22 @@ def mini_court(x, z, y=GROUND):
 
 
 def board():
-    """The tabletop: a wooden slab, paved on top, with the Park's grass and the lawn in front of the city."""
+    """The tabletop: a wooden slab, paved on top, with the Park's grass running on into the lawn in front of the
+    city, and a hedge between the Park and the city's blocks."""
     b = Builder(PALETTE["map"])
     b.box((BOARD_X * 2, BOARD_DEPTH, DEPTH_Z), (0, -BOARD_DEPTH / 2 - 0.02, MID_Z), "board", 0.3)
     b.box((BOARD_X * 2 + 0.4, 0.5, DEPTH_Z + 0.4), (0, -BOARD_DEPTH - 0.1, MID_Z), "boardDark", 0.15)
     b.box((BOARD_X * 2 - 0.2, 0.04, DEPTH_Z - 0.2), (0, -0.01, MID_Z), "pavement", 0)
     park_w = CITY_X[0] + BOARD_X
     b.box((park_w, 0.06, DEPTH_Z - 0.2), (-BOARD_X + park_w / 2, 0.01, MID_Z), "grass", 0)
-    lawn_w = CITY_X[1] - CITY_X[0]
-    b.box((lawn_w, 0.06, FRONT - LAWN_Z - 0.1), ((CITY_X[0] + CITY_X[1]) / 2, 0.01, (LAWN_Z + FRONT) / 2), "grassDark", 0)
+    lawn_w = BOARDWALK_X[0] - CITY_X[0]
+    b.box((lawn_w, 0.06, FRONT - LAWN_Z - 0.1), (CITY_X[0] + lawn_w / 2, 0.01, (LAWN_Z + FRONT) / 2), "grass", 0)
+    # The hedge, in clipped lengths, from the back of the board to the avenue's turning circle.
+    z = BACK + 0.6
+    while z < AVENUE_Z - TURN[0] - 1.5:
+        length = min(4.2, AVENUE_Z - TURN[0] - 0.9 - z)
+        b.box((1.1, 0.9, length), (CITY_X[0] - 1.1, 0.45, z + length / 2), "hedge", 0.25)
+        z += length + 0.5
     # The slab's sides under the sea show the water, as if cut through.
     for edge, s in ((BACK, -1), (FRONT, 1)):
         x0 = shore(edge)
@@ -161,17 +176,38 @@ def board():
 
 
 def roads():
-    """The avenue in front of the city and two streets running back from it, from Kenney's road tiles."""
-    tiles = []
-    for x in range(int(CITY_X[0]) + 5, int(CITY_X[1]), 10):
-        if x in STREETS_X:
-            tiles += kenney("city-kit-roads/road-intersection.glb", x, AVENUE_Z, turns=2)
-        else:
-            tiles += kenney("city-kit-roads/road-straight.glb", x, AVENUE_Z)
+    """The avenue in front of the city, with a turning circle at each end, and two streets running back from it,
+    in the colors of Kenney's road tiles. Each layer sits a little above the one under it (sidewalk, gutter,
+    asphalt, center line), so where roads cross, the asphalt covers the other road's sidewalk and gutter."""
+    b = Builder(PALETTE["map"])
+    layers = (("sidewalk", 0.14), ("gutter", 0.17), ("asphalt", 0.2))
+    x0, x1 = AVENUE_ENDS
+    for (color, top), half, turn in zip(layers, ROAD, TURN):
+        b.box((x1 - x0, 0.1, half * 2), ((x0 + x1) / 2, top - 0.05, AVENUE_Z), color, 0)
+        for x in AVENUE_ENDS:
+            b.prism(turn, 0.1, (x, top - 0.05, AVENUE_Z), color, sides=24)
+        for sx in STREETS_X:
+            b.box((half * 2, 0.1, AVENUE_Z - BACK - 0.1), (sx, top - 0.05, (AVENUE_Z + BACK + 0.1) / 2), color, 0)
+    # The center lines, which stop at the crossings.
+    stops = [x0, *(x + s * ROAD[1] for x in STREETS_X for s in (-1, 1)), x1]
+    for a, c in zip(stops[::2], stops[1::2]):
+        b.box((c - a, 0.1, 0.2), ((a + c) / 2, 0.18, AVENUE_Z), "roadLine", 0)
     for sx in STREETS_X:
-        for z in range(int(AVENUE_Z) - 10, int(BACK), -10):
-            tiles += kenney("city-kit-roads/road-straight.glb", sx, z, turns=1)
-    return tiles
+        z0 = AVENUE_Z - ROAD[1]
+        b.box((0.2, 0.1, z0 - BACK - 0.1), (sx, 0.18, (z0 + BACK + 0.1) / 2), "roadLine", 0)
+    return [b.build("roads")]
+
+
+def boardwalk():
+    """A wooden boardwalk between the city and the Beach, from the back of the board to the front."""
+    b = Builder(PALETTE["beach"])
+    x0, x1 = BOARDWALK_X
+    b.box((x1 - x0, 0.16, DEPTH_Z - 0.2), ((x0 + x1) / 2, 0.08, MID_Z), "woodDark", 0)
+    z = BACK + 0.1
+    while z < FRONT - 0.2:
+        b.box((x1 - x0 - 0.1, 0.06, 0.88), ((x0 + x1) / 2, 0.17, z + 0.45), "wood", 0.01)
+        z += 1.0
+    return [b.build("boardwalk")]
 
 
 def buildings():
@@ -231,6 +267,9 @@ def park_zone(sway):
         b.box((3.0, 0.05, 31.0), (x + s * 9.5, 0.06, z), "path", 0)
         b.box((22.0, 0.05, 3.0), (x, 0.06, z + s * 14.0), "path", 0)
     b.box((3.0, 0.05, 20.0), (x - 9.5, 0.06, z - 24.0), "path", 0)
+    # Lamps either side of the gate, where the path leaves the avenue's turning circle.
+    for s in (-1, 1):
+        park.lamp(b, CITY_X[0] - 1.2, AVENUE_Z + s * 2.3)
     park.fountain(b, x - 9.5, z - 36.0)
     park.flower_bed(b, x - 16.0, z - 36.0, 3.5, 2.5)
     park.flower_bed(b, x - 3.0, z - 36.0, 3.5, 2.5)
@@ -261,6 +300,16 @@ def park_zone(sway):
     return [b.build("park"), *mini_court(x, z), *kits]
 
 
+def dune_grass(b, x, z, seed):
+    """A clump of thin blades leaning out from (x, z)."""
+    for k in range(7):
+        a = (k / 7 + seed * 0.13) * math.tau
+        lean = 0.25 + 0.1 * (k % 3)
+        h = 0.9 + 0.25 * ((k + seed) % 3)
+        b.prism(0.09, h, (x + 0.35 * math.cos(a), h / 2, z + 0.35 * math.sin(a)), "grass", sides=4, top_radius=0.01,
+                rot=(lean * math.sin(a), 0, -lean * math.cos(a)))
+
+
 def beach_zone(sway, water):
     """The Beach: sand, its court with a rope fence, huts, umbrellas, a lifeguard tower and palms (into `sway`);
     the sea in bands that deepen away from the shore (into `water`)."""
@@ -272,15 +321,18 @@ def beach_zone(sway, water):
     for s in (-1, 1):
         beach.rope_fence(b, x + s * beach.FENCE_X, z - beach.FENCE_Z, x + s * beach.FENCE_X, z + beach.FENCE_Z)
         beach.rope_fence(b, x - beach.FENCE_X, z + s * beach.FENCE_Z, x + beach.FENCE_X, z + s * beach.FENCE_Z)
-    for i, hx in enumerate((41.0, 45.0, 49.0)):
+    for i, hx in enumerate((42.0, 46.0, 50.0)):
         beach.hut(b, hx, -34.0, ("hutStripe", "umbrellaA", "umbrellaB")[i])
     for ux, uz, c, t in ((41.5, -9, "umbrellaA", "towelA"), (50.0, -15, "umbrellaB", "towelB"), (41.5, 25, "umbrellaC", "towelA"),
                          (50.5, 26, "umbrellaA", "towelB"), (50.5, -3, "umbrellaC", "towelA")):
         beach.umbrella(b, ux, uz, c, t)
     beach.lifeguard_tower(b, shore(-24) - 2.2, -24)
-    for px, pz, sc, lean in ((40, -24, 1.8, 0.8), (52, -29, 1.6, -0.6), (39.5, -1, 1.7, 0.7), (55, 24, 1.8, -0.8),
-                             (40, 28.5, 1.6, 0.6), (47, -38, 1.7, -0.5)):
+    for px, pz, sc, lean in ((41.5, -24, 1.8, 0.8), (52, -29, 1.6, -0.6), (41.5, -1, 1.7, 0.7), (55, 24, 1.8, -0.8),
+                             (41.5, 28.5, 1.6, 0.6), (47.5, -38, 1.7, -0.5)):
         beach.palm(sway, px, pz, sc, lean)
+    # Dune grass along the boardwalk, so the sand doesn't start in a bare line.
+    for i, tz in enumerate((-37.5, -29.0, -19.0, -12.5, -5.0, 29.5)):
+        dune_grass(b, BOARDWALK_X[1] + 0.9, tz, i)
     rocks = []
     rock = {"dirt": PALETTE["beach"]["rock"], "grass": PALETTE["beach"]["rockDark"]}
     for i, rz in enumerate((-36, 4, 27)):
@@ -309,7 +361,7 @@ def build():
     sway_park = Builder(PALETTE["park"])
     sway_beach = Builder(PALETTE["beach"])
     water = Builder(PALETTE["beach"])
-    still = [*board(), *roads(), *buildings(), *rooftop_block(), *park_zone(sway_park), *beach_zone(sway_beach, water)]
+    still = [*board(), *roads(), *boardwalk(), *buildings(), *rooftop_block(), *park_zone(sway_park), *beach_zone(sway_beach, water)]
     meshes = [join(still, "map"), join([sway_park.build("sway"), sway_beach.build("swayBeach")], "sway"), water.build("water")]
     for obj in meshes:
         obj.data.transform(Matrix.Scale(SCALE, 4))
