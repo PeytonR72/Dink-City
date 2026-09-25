@@ -74,7 +74,6 @@ export const DIFFICULTY = {
     shotChoiceAccuracy: 0.55,
     kitchenDiscipline: 0.94,
   },
-  // Playtesting found the first hard unbeatable; this was medium until 05's playtest.
   hard: {
     reactionTicks: 14,
     moveSpeed: 0.9,
@@ -160,7 +159,7 @@ function kitchenEdge(t: SimTuning): number {
  */
 const OUT_MARGIN = 0.15;
 /** Top speed (a fraction of `playerSpeed`) while the ball is dead: a walk, not a sprint or a sudden stop. */
-const WALK = 0.35;
+const WALK_SPEED = 0.35;
 
 interface PathPoint {
   tick: number;
@@ -237,7 +236,7 @@ export function createBot(
       }
       if (o.phase === 'dead') {
         settleSpot ??= readySpot(o);
-        return moveTo(o, settleSpot, null, WALK);
+        return moveTo(o, settleSpot, null, WALK_SPEED);
       }
       if (o.phase !== 'rally') return idle;
 
@@ -247,7 +246,8 @@ export function createBot(
         seenAt = o.tick;
         error = { x: spread() * difficulty.predictionError, z: spread() * difficulty.predictionError };
         disciplined = random() < difficulty.kitchenDiscipline;
-        leave = shown.leave = false;
+        leave = false;
+        shown.leave = false;
         settleSpot = null;
         // The mistakes a Difficulty allows, rolled once per ball.
         // An Unforced error is also always off-center.

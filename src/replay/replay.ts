@@ -46,14 +46,14 @@ export function createReplay(rally: RecordedRally, t: SimTuning, opts: { seconds
   let reached = 0;
   let holdLeft = opts.hold;
   let events: SimEvent[] = [];
-  /** Draw between frames `i` and `i + 1`. */
-  const i = () => Math.max(0, Math.min(Math.floor(clock), last - 1));
+  /** The frame the drawn moment is at or just past: draw from it toward the next. */
+  const frameBefore = () => Math.max(0, Math.min(Math.floor(clock), last - 1));
 
   return {
     advance(dt) {
       if (clock >= last) holdLeft -= dt;
       clock = Math.min(last, clock + (dt * opts.speed) / TICK);
-      const newest = Math.min(last, i() + 1);
+      const newest = Math.min(last, frameBefore() + 1);
       events = frames.slice(reached + 1, newest + 1).flatMap((f) => f.events);
       reached = Math.max(reached, newest);
     },
@@ -63,13 +63,13 @@ export function createReplay(rally: RecordedRally, t: SimTuning, opts: { seconds
       events = [];
     },
     get prev() {
-      return frames[i()];
+      return frames[frameBefore()];
     },
     get curr() {
-      return frames[Math.min(last, i() + 1)];
+      return frames[Math.min(last, frameBefore() + 1)];
     },
     get alpha() {
-      return last === 0 ? 1 : clock - i();
+      return last === 0 ? 1 : clock - frameBefore();
     },
     get events() {
       return events;

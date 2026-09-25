@@ -153,6 +153,7 @@ def build():
     band(b, lambda z: 0.12, WASH_EDGE, 0.005, "foam")
     for _ in range(18):
         fz = rng.uniform(-30, 30)
+        # Longer than the old foam boxes, so the curve along the shore shows.
         length = rng.uniform(1.5, 3.5) * 1.6
         crest(b, fz - length / 2, length, rng.uniform(3, 14))
 
