@@ -141,15 +141,22 @@ export class Practice {
 /** A precise machine: no mistakes, quick and steady. */
 const MACHINE: Difficulty = { ...DIFFICULTY.hard, lateCommit: 0, offCenter: 0, unforcedError: 0, aimNoise: 0, kitchenDiscipline: 1 };
 
-/** The ball machine: a Bot whose shot presses follow the current step's feeds, aimed down the middle. */
+/**
+ * The ball machine: a Bot whose shot presses follow the current step's feeds, aimed down the middle. It only
+ * moves while it still has a feed to hit this rep, so it never chases a ball it will let go.
+ */
 export function createMachine(seed: number, t: SimTuning, step: () => PracticeStep) {
   const bot = createBot(1, seed, MACHINE, t);
   return {
     plan: bot.plan,
     think(o: Observation): Intent {
+      // Always think, so the Bot's per-ball state stays current for free play.
       const intent = bot.think(o);
       const { feeds } = step();
-      if (!intent.shot || !feeds) return intent;
+      if (!feeds) return intent;
+      const feedsLeft = Object.keys(feeds).some((n) => Number(n) > o.shots);
+      if (!feedsLeft) return { move: { x: 0, y: 0 }, aim: intent.aim, shot: null };
+      if (!intent.shot) return intent;
       const shot = feeds[o.shots + 1] ?? null;
       // A Soft feed goes short (a drop into the Kitchen); everything else to the middle.
       return { ...intent, shot, aim: { x: 0, y: shot === 'soft' && o.shots > 0 ? -0.4 : 0 } };

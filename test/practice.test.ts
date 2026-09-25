@@ -115,12 +115,41 @@ describe('The ball machine', () => {
     const player = createBot(0, seed + 1, DIFFICULTY.hard, t);
     let s: SimState = createInitialState(seed, undefined, practice.step.server);
     const events: SimEvent[] = [];
+    /** The machine's feet each Tick, and the Tick of its last hit. */
+    const machineAt: { x: number; z: number }[] = [];
+    let lastFeed = -1;
     while (!events.some((e) => e.kind === 'dead') && s.tick < 60 * 40) {
       s = step(s, [player.think(observe(s, 0)), machine.think(observe(s, 1))], t);
       events.push(...s.events);
+      machineAt.push({ ...s.sides[1].players[0].pos });
+      if (s.events.some((e) => e.kind === 'hit' && e.side === 1)) lastFeed = machineAt.length - 1;
     }
-    return { events, hits: events.filter((e): e is Hit => e.kind === 'hit') };
+    return { events, hits: events.filter((e): e is Hit => e.kind === 'hit'), machineAt, lastFeed };
   }
+
+  /** How far the machine's feet travel over `from`…the end of the rep. */
+  function travel(machineAt: { x: number; z: number }[], from: number) {
+    let d = 0;
+    for (let i = Math.max(1, from); i < machineAt.length; i++) d += Math.hypot(machineAt[i].x - machineAt[i - 1].x, machineAt[i].z - machineAt[i - 1].z);
+    return d;
+  }
+
+  it('never moves in the return step, where it only serves', () => {
+    const { machineAt } = rep(0);
+    expect(travel(machineAt, 0)).toBe(0);
+  });
+
+  it('stands still after its last feed of the rep, instead of chasing balls it will let go', () => {
+    // Half a second to brake from a run, then not a step.
+    const settle = 30;
+    for (const stepIndex of [1, 2, 3]) {
+      for (const seed of [3, 4, 5]) {
+        const { machineAt, lastFeed } = rep(stepIndex, seed);
+        expect(lastFeed).toBeGreaterThanOrEqual(0);
+        expect(travel(machineAt, lastFeed + settle), `step ${stepIndex + 1}, seed ${seed}`).toBe(0);
+      }
+    }
+  });
 
   it('serves in the return step, then lets the return go', () => {
     const { hits, events } = rep(0);
