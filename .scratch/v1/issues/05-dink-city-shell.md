@@ -93,3 +93,29 @@ These are the six fixes from `.scratch/v1/handoff-05-fixes.md`. 149 Vitest tests
   - The zero-move Intent literal appears in three places.
   - `{x, z}` spots have no named type in bot.ts.
   - beach.py uses module-level lambdas for the band edges.
+
+### 2026-09-24: the post-playtest polish (handoff-05-polish.md)
+
+All five requests are done; issue 06 is not started.
+
+- **Stray WINNER** (`c7e275a`): `Hud.reset()` clears `#shout`. The map hid the HUD, and showing it again restarted the leftover call-out's animation. An e2e test covers it.
+- **NET CITY** (`97da2ad`): every net Fault, whoever hit it, Practice included. "NET" pops, then "CITY", then "The ball actually needs to go OVER the net." types out. The reveal is timed by frames in the HUD (`src/hud/reveal.ts`), so it plays on through the Replay. A "Side out." waits until the typing ends. Reduced motion shows the final text at once.
+- **Lob error** (`c40dd6a`), as the user chose: Lobs only.
+  - Off the opponent's Smash: 1.15× depth and 1.1× aim spread.
+  - Off a rushed Commit: 1.05× aim spread.
+  - The two don't stack; off a Smash wins.
+  - The factors are `lobOffSmashDepth`, `lobOffSmashError` and `lobRushedError` in Tuning and the debug panel.
+  - The golden Game moved from 11–6 at tick 30485 to 11–13 at tick 39353. The Personality rates were re-measured.
+- **Beach props** (`07eff4f`): the sides were laid out again, and the build fails on an overlap or on a prop in the sea. `turned()` and `check_footprints` moved to lib.py.
+- **Budget test** (`1a40589`): the local Bot never served, so the budget was measured on a still court. It now plays a real Rally.
+- **The map** (`edf071e`, `6337c8f`, `9028843`), live three.js as the user chose; it ignores sunset.
+  - `art/scripts/map.py` builds a tabletop diorama. The Venues use their own scripts' helpers, among Kenney CC0 buildings, roads and plants (`art/vendor/kenney/`, atlas colors baked to vertex colors).
+  - `src/menu/mapView.ts` draws it only while the menu shows, and the court behind is not redrawn meanwhile.
+  - Trees sway and the sea ripples in the vertex shader.
+  - Hovering or focusing a pin moves the camera toward that Venue along the line of sight.
+  - Measured: 3 draw calls and 31k triangles. `map.glb` is 787 KB, 225 KB gzipped. It is fetched in the background at startup, so issue 06's host should serve `.glb` compressed.
+- **Review** (`bae3d10`), smells left as they are:
+  - The map view makes a second WebGL context, which lives for the whole session.
+  - The lights and the flat Lambert material are repeated across the renderer, the preview and the map view.
+  - `FaultText` now also types non-Fault banners.
+  - Footprints are bare tuples keyed by name strings.
