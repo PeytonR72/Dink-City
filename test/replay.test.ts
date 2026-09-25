@@ -35,47 +35,59 @@ function playAll(replay: ReturnType<typeof createReplay>, dt: number) {
 describe('Fault Replay', () => {
   const { rally, dead } = recordRally(7, 300);
 
-  it('ends on exactly the state the live Rally ended on', () => {
-    const replay = createReplay(rally, t, { seconds: 2.5, speed: 0.5 });
+  const clip = { seconds: 2.5, speed: 0.5, hold: 0 };
+
+  it('ends drawing exactly the state the live Rally ended on', () => {
+    const replay = createReplay(rally, t, clip);
     playAll(replay, 1 / 60);
     expect(replay.curr).toEqual(dead);
+    expect(replay.alpha).toBe(1);
   });
 
   it('starts 2.5 s before the Fault', () => {
-    const replay = createReplay(rally, t, { seconds: 2.5, speed: 0.5 });
-    expect(dead.tick - replay.curr.tick).toBe(150);
+    const replay = createReplay(rally, t, clip);
+    expect(replay.alpha).toBe(0);
+    expect(dead.tick - replay.prev.tick).toBe(150);
   });
 
   it('plays the whole Rally when it is shorter than the clip', () => {
     const short = recordRally(7);
-    const replay = createReplay(short.rally, t, { seconds: 60, speed: 1 });
-    expect(replay.curr).toEqual(short.rally.start);
+    const replay = createReplay(short.rally, t, { ...clip, seconds: 60, speed: 1 });
+    expect(replay.prev).toEqual(short.rally.start);
   });
 
   it('takes the clip length divided by the speed, in real time', () => {
-    const replay = createReplay(rally, t, { seconds: 2.5, speed: 0.5 });
+    const replay = createReplay(rally, t, clip);
     const { frames } = playAll(replay, 1 / 60);
     expect(frames).toBeGreaterThanOrEqual(299);
     expect(frames).toBeLessThanOrEqual(301);
   });
 
+  it('holds on the Fault for `hold` seconds before it is done', () => {
+    const replay = createReplay(rally, t, { ...clip, hold: 0.5 });
+    const { frames } = playAll(replay, 1 / 60);
+    expect(frames).toBeGreaterThanOrEqual(329);
+    expect(frames).toBeLessThanOrEqual(331);
+    expect(replay.curr).toEqual(dead);
+  });
+
   it("emits each replayed Tick's events once, ending with the Fault", () => {
-    const replay = createReplay(rally, t, { seconds: 2.5, speed: 0.5 });
+    const replay = createReplay(rally, t, clip);
     const { events } = playAll(replay, 1 / 144);
     const deads = events.filter((e) => e.kind === 'dead');
     expect(deads).toEqual(dead.events.filter((e) => e.kind === 'dead'));
   });
 
   it('interpolates between neighbouring Ticks', () => {
-    const replay = createReplay(rally, t, { seconds: 2.5, speed: 0.5 });
+    const replay = createReplay(rally, t, clip);
     replay.advance(TICK * 2.5); // 1.25 Ticks at half speed
     expect(replay.curr.tick - replay.prev.tick).toBe(1);
-    expect(replay.curr.tick).toBe(dead.tick - 149);
+    expect(replay.prev.tick).toBe(dead.tick - 149);
     expect(replay.alpha).toBeCloseTo(0.25);
   });
 
   it('can be skipped', () => {
-    const replay = createReplay(rally, t, { seconds: 2.5, speed: 0.5 });
+    const replay = createReplay(rally, t, { ...clip, hold: 0.5 });
     replay.skip();
     expect(replay.done).toBe(true);
   });

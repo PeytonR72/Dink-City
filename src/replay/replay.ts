@@ -13,17 +13,23 @@ export interface Replay {
   /** Moves the Replay's clock on by `dt` real seconds (scaled by its speed). */
   advance(dt: number): void;
   skip(): void;
-  /** The two states to draw between, as in the live loop: `curr` is the newest, `alpha` the way from `prev` to it. */
+  /**
+   * The two states to draw between, as in the live loop: `curr` is the newest Tick reached, `alpha` the way from
+   * `prev` to it. The clip draws from its first frame exactly to the Fault.
+   */
   readonly prev: SimState;
   readonly curr: SimState;
   readonly alpha: number;
-  /** Events of the Ticks reached by the last `advance`, for sounds and swings. */
+  /** Events of the Ticks reached by the last `advance` (they arrive with `curr`), for sounds and swings. */
   readonly events: readonly SimEvent[];
   readonly done: boolean;
 }
 
-/** The last `seconds` of the Rally (or all of it, if shorter), played at `speed`. */
-export function createReplay(rally: RecordedRally, t: SimTuning, opts: { seconds: number; speed: number }): Replay {
+/**
+ * The last `seconds` of the Rally (or all of it, if shorter), played at `speed`, then held on the Fault for
+ * `hold` real seconds so it reads before the cut away.
+ */
+export function createReplay(rally: RecordedRally, t: SimTuning, opts: { seconds: number; speed: number; hold: number }): Replay {
   const keep = Math.round(opts.seconds / TICK) + 1;
   const frames: SimState[] = [rally.start];
   let s = rally.start;
@@ -34,36 +40,42 @@ export function createReplay(rally: RecordedRally, t: SimTuning, opts: { seconds
   }
   const last = frames.length - 1;
 
-  /** Clip time, in Ticks. */
+  /** Clip time, in Ticks: the drawn moment, from 0 (the first frame) to `last` (the Fault). */
   let clock = 0;
-  let index = 0;
+  /** The newest frame whose events have been emitted. */
+  let reached = 0;
+  let holdLeft = opts.hold;
   let events: SimEvent[] = [];
+  /** Draw between frames `i` and `i + 1`. */
+  const i = () => Math.max(0, Math.min(Math.floor(clock), last - 1));
 
   return {
     advance(dt) {
+      if (clock >= last) holdLeft -= dt;
       clock = Math.min(last, clock + (dt * opts.speed) / TICK);
-      const reached = Math.floor(clock);
-      events = frames.slice(index + 1, reached + 1).flatMap((f) => f.events);
-      index = reached;
+      const newest = Math.min(last, i() + 1);
+      events = frames.slice(reached + 1, newest + 1).flatMap((f) => f.events);
+      reached = Math.max(reached, newest);
     },
     skip() {
-      clock = index = last;
+      clock = reached = last;
+      holdLeft = 0;
       events = [];
     },
     get prev() {
-      return frames[Math.max(0, index - 1)];
+      return frames[i()];
     },
     get curr() {
-      return frames[index];
+      return frames[Math.min(last, i() + 1)];
     },
     get alpha() {
-      return clock - index;
+      return last === 0 ? 1 : clock - i();
     },
     get events() {
       return events;
     },
     get done() {
-      return index >= last;
+      return clock >= last && holdLeft <= 0;
     },
   };
 }

@@ -25,6 +25,7 @@ export function createDebugPanel(sim: SimTuning, view: ViewTuning, bot: Difficul
   v.addBinding(view, 'replaySeconds', { min: 0.5, max: 8, step: 0.25 });
   v.addBinding(view, 'replaySpeed', { min: 0.1, max: 1.5, step: 0.05 });
   v.addBinding(view, 'replayDelay', { min: 0, max: 1.2, step: 0.05 });
+  v.addBinding(view, 'replayHold', { min: 0, max: 1.5, step: 0.05 });
   v.addBinding(view, 'volume', { min: 0, max: 1, step: 0.05 });
   v.addBinding(view, 'ambience', { min: 0, max: 1, step: 0.05 });
   v.addBinding(view, 'sunset');

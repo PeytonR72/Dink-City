@@ -285,6 +285,7 @@ function tick(local: Intent = input.sample()) {
       replay = createReplay({ start: rally.start, intents: rally.intents.slice() }, simTuning, {
         seconds: viewTuning.replaySeconds,
         speed: viewTuning.replaySpeed,
+        hold: viewTuning.replayHold,
       });
       replayIn = viewTuning.replayDelay;
     }
@@ -317,8 +318,22 @@ function playReplay(dt: number): boolean {
   playEvents(replay.events, endOf(rc, LOCAL), viewTuning);
   hud.update(curr, dt);
   renderer.render(rp, rc, replay.alpha, dt);
-  if (replay.done) endReplay();
+  if (replay.done) {
+    endReplay();
+    skipDeadPause();
+  }
   return true;
+}
+
+/**
+ * Plays out the rest of the dead pause unseen, so a Replay cuts back in at the next Serve (where the Players are
+ * placed anyway) rather than mid pause, with everyone jumped from where the Fault left them.
+ */
+function skipDeadPause() {
+  const still: Intent = { move: { x: 0, y: 0 }, aim: { x: 0, y: 0 }, shot: null };
+  while (curr.phase === 'dead') tick(still);
+  prev = curr;
+  acc = 0;
 }
 
 function frame(now: number) {
