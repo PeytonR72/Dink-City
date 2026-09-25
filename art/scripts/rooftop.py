@@ -85,6 +85,11 @@ def vent(b, x, z):
     b.prism(0.34, 0.2, (x, 0.95, z), "metal", sides=8)
 
 
+def flag_pole(b, x, z):
+    b.prism(0.06, 5.0, (x, 2.5, z), "metal", sides=6)
+    b.box((0.03, 0.9, 1.4), (x, 4.5, z + 0.7), "flag", 0)
+
+
 def tower(b, x, z, w, d, top, color):
     """A skyline building rising from the street to `top`, with window bands and a roof cap."""
     h = top - STREET_Y
@@ -99,8 +104,25 @@ def tower(b, x, z, w, d, top, color):
         water_tank(b, x + rng.uniform(-w / 4, w / 4), z + rng.uniform(-d / 4, d / 4), 0.8, top + 0.3)
 
 
+def check_footprints(footprints, gap=0.3):
+    """Fails the build if two props' footprints (with `gap` between them) overlap."""
+    for i, (name, x, z, hw, hd) in enumerate(footprints):
+        for other, ox, oz, ohw, ohd in footprints[i + 1 :]:
+            if abs(x - ox) < hw + ohw + gap and abs(z - oz) < hd + ohd + gap:
+                raise RuntimeError(f"{name} at ({x}, {z}) overlaps {other} at ({ox}, {oz})")
+
+
 def build():
     b = Builder(COLORS)
+    footprints = []
+
+    def props(make, spots, half, *args):
+        """`make` at each spot and its turned partner; `half` is the footprint's half size (x, z)."""
+        for spot in spots:
+            for x, z in turned(*spot):
+                make(b, x, z, *args)
+                footprints.append((make.__name__, x, z, *half))
+
     b.box((400, 0.02, 400), (0, STREET_Y, 0), "street", 0)
     # The deck: tiles in a checker, a darker band around the court, and a parapet at the edge.
     b.box((DECK_X * 2, 0.4, DECK_Z * 2), (0, -0.215, 0), "deck", 0)
@@ -116,32 +138,17 @@ def build():
     for s in (-1, 1):
         chain_link(b, s * FENCE_X, -FENCE_Z, s * FENCE_X, FENCE_Z)
         chain_link(b, -FENCE_X, s * FENCE_Z, FENCE_X, s * FENCE_Z, height=2.0)
-    # Props, each with its turned partner.
-    for x, z in turned(-10.0, -13.0):
-        water_tank(b, x, z, 1.1)
-    for x, z in turned(9.6, -14.2):
-        stair_hut(b, x, z)
-    for x, z in turned(-9.5, -4.0):
-        ac_unit(b, x, z, 0.1)
-    for x, z in turned(-9.5, -1.2):
-        ac_unit(b, x, z, -0.05)
-    for x, z in turned(9.8, 3.5):
-        ac_unit(b, x, z)
-    for x, z in turned(-4.0, -12.6):
-        planter(b, x, z)
-    for x, z in turned(1.5, -12.6):
-        planter(b, x, z)
-    for x, z in turned(5.8, -15.8):
-        planter(b, x, z, 2.4)
-    for x, z in turned(-6.5, -15.6):
-        vent(b, x, z)
-    for x, z in turned(-7.4, -15.9):
-        vent(b, x, z)
-    for x, z in turned(8.3, 9.0):
-        vent(b, x, z)
-    for x, z in turned(-11.3, 8.0):
-        b.prism(0.06, 5.0, (x, 2.5, z), "metal", sides=6)
-        b.box((0.03, 0.9, 1.4), (x, 4.5, z + 0.7), "flag", 0)
+    # Props, each with its turned partner, checked for overlaps below.
+    props(water_tank, [(-10.0, -13.0)], (1.4, 1.4), 1.1)
+    props(stair_hut, [(9.6, -14.2)], (1.75, 1.35))
+    props(ac_unit, [(-9.5, -4.0)], (0.85, 0.6), 0.1)
+    props(ac_unit, [(-9.5, -1.2)], (0.85, 0.6), -0.05)
+    props(ac_unit, [(9.8, 6.8)], (0.85, 0.6))
+    props(planter, [(-4.0, -12.6), (1.5, -12.6)], (0.9, 0.4))
+    props(planter, [(5.8, -15.8)], (1.2, 0.4), 2.4)
+    props(vent, [(-6.5, -15.6), (-7.6, -16.4), (8.3, 9.0)], (0.35, 0.35))
+    props(flag_pole, [(-11.3, 8.0)], (0.1, 0.1))
+    check_footprints(footprints)
     # Lights on poles at the fence corners.
     for x, z in ((FENCE_X, FENCE_Z), (-FENCE_X, FENCE_Z), (FENCE_X, -FENCE_Z), (-FENCE_X, -FENCE_Z)):
         b.prism(0.07, 4.2, (x, 2.1, z), "metal", sides=6)
