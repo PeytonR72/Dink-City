@@ -48,3 +48,48 @@ All six Acceptance items are built. 142 Vitest tests and 11 Playwright checks pa
   - `turned()` is duplicated in rooftop.py and beach.py.
   - The rows of radio buttons are built twice (Settings and the locker).
   - Adding a Venue touches `venues.ts`, `assets.ts`, `progress.ts` and the map's `PINS`.
+
+### 2026-09-24: playtest fixes (commits 874f121, ff8538d, af29e79, 35ed510, 17ac95a, 37a81a1, 3d7a45f)
+
+These are the six fixes from `.scratch/v1/handoff-05-fixes.md`. 149 Vitest tests and 11 Playwright checks pass (Park 18k, Rooftop 28k, Beach 22k triangles).
+
+- **Practice, the machine chased balls (874f121):** it now moves only while it still has a feed to hit this rep, and stands still after that. It never moves in step 1. A ball can still fly through it where it stands; there is no collision in the Sim.
+- **The Bot stuttered when leaving a ball (ff8538d):**
+  - Its settle spot is now fixed when it decides to leave the ball, instead of following the ball's x every Tick.
+  - It leaves a ball only when the read is out by more than its own read error, at every Difficulty, including easy.
+  - It walks (35% speed) while the ball is dead.
+  - The golden result moved from 11-5 @ 20188 to 11-6 @ 30485. The handicap stats now pool seeds 6 and 7.
+- **The Replay stuttered at its end (af29e79):**
+  - The clip drew a Tick behind its clock and never showed the Fault frame. Now it does.
+  - It holds on the Fault frame for `replayHold` (0.5 s).
+  - The rest of the dead pause plays out unseen, so the cut lands on the next Serve.
+  - Hypothesis 3 (stale swings) was ruled out: the Replay's hit ticks equal the live ones.
+- **Difficulty recalibration (35ed510):**
+  - hard is exactly the old medium.
+  - medium is the midpoint of easy and hard in every field.
+  - The machine has its own explicit values.
+  - Stars already earned keep their names, so an old medium star now reads as hard, which is the same Bot.
+  - Bot-vs-Bot, five Games each:
+
+    | Matchup | Hits per Rally | Server wins | Rallies won |
+    |---|---|---|---|
+    | easy vs easy | 6.6 | 35% | |
+    | medium vs medium | 7.7 | 37% | |
+    | hard vs hard | 10.2 | 41% | |
+    | medium vs hard | | | medium 33% |
+    | easy vs medium | | | easy 32% |
+    | easy vs hard | | | easy 27% |
+
+  - `.scratch/v1/handoff-03.md`'s "baseline with medium Bots" now describes hard.
+- **Rooftop overlaps (17ac95a):** two AC pairs intersected. One pair moved, and the vents were spread out. The build now fails if any prop footprints overlap.
+- **Beach water (37a81a1):** the user chose to fix the jagged shoreline and the colors and hard edges, not the static water. The sea is now strips that follow the shoreline:
+  - wet sand
+  - a foam wash at the waterline
+  - shallows darkening through two blues to deep water
+  - thin curved wave crests
+
+  This uses a new `Builder.strip` in lib.py.
+- **Review smells left as they are:**
+  - The zero-move Intent literal appears in three places.
+  - `{x, z}` spots have no named type in bot.ts.
+  - beach.py uses module-level lambdas for the band edges.
