@@ -9,7 +9,7 @@ const MAX_TICKS = 60 * 60 * 30;
 vi.setConfig({ testTimeout: 60_000 });
 
 /** A seeded Bot-vs-Bot Game, recording every Tick's Intents. */
-function botGame(seed: number, difficulty: Difficulty = DIFFICULTY.medium, opponent: Difficulty = difficulty) {
+function botGame(seed: number, difficulty: Difficulty = DIFFICULTY.hard, opponent: Difficulty = difficulty) {
   const bots = [createBot(0, seed + 1, difficulty, t), createBot(1, seed + 2, opponent, t)] as const;
   const start = createInitialState(seed);
   let s: SimState = start;
@@ -39,7 +39,7 @@ function mean(values: number[]): number {
 const handicaps = new Map<string, ReturnType<typeof measureHandicap>>();
 
 /**
- * A medium Bot with one handicap changed (the others off), against a plain medium Bot: its mean Shot quality
+ * A hard Bot with one handicap changed (the others off), against a plain hard Bot: its mean Shot quality
  * and factors, and the share of its shots that went out or into the net. Two Games pooled, since one Game's
  * averages are noisy.
  */
@@ -51,7 +51,7 @@ function handicapped(change: Partial<Difficulty>) {
 
 function measureHandicap(change: Partial<Difficulty>) {
   const events = [6, 7].flatMap(
-    (seed) => botGame(seed, { ...DIFFICULTY.medium, lateCommit: 0, offCenter: 0, unforcedError: 0, ...change }, DIFFICULTY.medium).events,
+    (seed) => botGame(seed, { ...DIFFICULTY.hard, lateCommit: 0, offCenter: 0, unforcedError: 0, ...change }, DIFFICULTY.hard).events,
   );
   const mine = hits(events).filter((h) => h.side === 0);
   const errors = events.filter((e) => e.kind === 'dead' && e.loser === 0 && (e.reason === 'out' || e.reason === 'net'));
@@ -139,7 +139,7 @@ describe('Bot-vs-Bot Game', () => {
   });
 
   it('with full discipline, never commits a Kitchen or Two-bounce Fault', () => {
-    const strict = botGame(7, { ...DIFFICULTY.medium, kitchenDiscipline: 1 });
+    const strict = botGame(7, { ...DIFFICULTY.hard, kitchenDiscipline: 1 });
     const faults = strict.events.filter((e) => e.kind === 'dead' && (e.reason === 'kitchen' || e.reason === 'two-bounce'));
     expect(faults).toEqual([]);
   });
@@ -147,7 +147,7 @@ describe('Bot-vs-Bot Game', () => {
 
 describe('Letting a ball go', () => {
   // Seed 6 used to leave a ball that landed in; seed 2 leaves plenty.
-  const left = leaves([2, 6], DIFFICULTY.medium);
+  const left = leaves([2, 6], DIFFICULTY.hard);
 
   it('happens: Bots do leave balls going out', () => {
     expect(left.count).toBeGreaterThan(5);
@@ -169,13 +169,13 @@ describe('Letting a ball go', () => {
 
 describe('Difficulty', () => {
   it('moves no faster than its move speed, a fraction of the human top speed', () => {
-    const { moveSpeed } = DIFFICULTY.medium;
+    const { moveSpeed } = DIFFICULTY.hard;
     expect(moveSpeed).toBeLessThan(1);
     const fastest = game.intents.flat().reduce((m, i) => Math.max(m, Math.hypot(i.move.x, i.move.y)), 0);
     expect(fastest).toBeLessThanOrEqual(moveSpeed + 1e-9);
   });
 
-  it('a medium Bot rarely paints the lines', () => {
+  it('a hard Bot rarely paints the lines', () => {
     const shots = game.rallyShots;
     const nearLine = shots.filter((i) => Math.abs(i.aim.x) > 0.8).length;
     expect(shots.length).toBeGreaterThan(100);

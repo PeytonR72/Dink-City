@@ -61,7 +61,21 @@ export const DIFFICULTY = {
     shotChoiceAccuracy: 0.4,
     kitchenDiscipline: 0.9,
   },
+  // Roughly halfway between easy and hard.
   medium: {
+    reactionTicks: 19,
+    moveSpeed: 0.83,
+    predictionError: 0.7,
+    aimWidth: 0.45,
+    aimNoise: 0.38,
+    lateCommit: 0.45,
+    offCenter: 0.25,
+    unforcedError: 0.08,
+    shotChoiceAccuracy: 0.55,
+    kitchenDiscipline: 0.94,
+  },
+  // Playtesting found the first hard unbeatable; this was medium until 05's playtest.
+  hard: {
     reactionTicks: 14,
     moveSpeed: 0.9,
     predictionError: 0.5,
@@ -72,18 +86,6 @@ export const DIFFICULTY = {
     unforcedError: 0.08,
     shotChoiceAccuracy: 0.7,
     kitchenDiscipline: 0.97,
-  },
-  hard: {
-    reactionTicks: 8,
-    moveSpeed: 0.95,
-    predictionError: 0.2,
-    aimWidth: 0.85,
-    aimNoise: 0.15,
-    lateCommit: 0.1,
-    offCenter: 0.05,
-    unforcedError: 0.02,
-    shotChoiceAccuracy: 0.9,
-    kitchenDiscipline: 1,
   },
 } satisfies Record<string, Difficulty>;
 

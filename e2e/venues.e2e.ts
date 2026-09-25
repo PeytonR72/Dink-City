@@ -36,7 +36,7 @@ for (const venue of VENUES) {
       const { observe } = await load('/src/bot/observe.ts');
       const { simTuning } = await load('/src/tuning.ts');
       const dink = (window as unknown as { dink: Dink }).dink;
-      const bot = createBot(0, 1, DIFFICULTY.medium, simTuning);
+      const bot = createBot(0, 1, DIFFICULTY.hard, simTuning);
       let worst = { calls: 0, triangles: 0 };
       for (let i = 0; i < 20; i++) {
         dink.advance(30, (s: unknown) => bot.think(observe(s, 0)));

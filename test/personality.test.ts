@@ -7,9 +7,9 @@ import { simTuning as t } from '../src/tuning';
 
 vi.setConfig({ testTimeout: 60_000 });
 
-/** A seeded Game of a medium Bot with `personality` (Side 0) against a neutral medium Bot. */
+/** A seeded Game of a hard Bot with `personality` (Side 0) against a neutral hard Bot. */
 function game(personality: Personality, seed = 11) {
-  const bots = [createBot(0, seed + 1, DIFFICULTY.medium, t, personality), createBot(1, seed + 2, DIFFICULTY.medium, t)] as const;
+  const bots = [createBot(0, seed + 1, DIFFICULTY.hard, t, personality), createBot(1, seed + 2, DIFFICULTY.hard, t)] as const;
   let s: SimState = createInitialState(seed);
   const events: SimEvent[] = [];
   while (s.phase !== 'over' && s.tick < 60 * 60 * 30) {

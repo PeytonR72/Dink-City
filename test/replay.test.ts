@@ -7,7 +7,7 @@ import { simTuning as t } from '../src/tuning';
 
 /** Bot-vs-Bot Rallies from a seeded Match, recorded the way main.ts records them, up to each Rally's end. */
 function recordRally(seed: number, minTicks = 0): { rally: RecordedRally; dead: SimState } {
-  const bots = [createBot(0, seed + 1, DIFFICULTY.medium, t), createBot(1, seed + 2, DIFFICULTY.medium, t)] as const;
+  const bots = [createBot(0, seed + 1, DIFFICULTY.hard, t), createBot(1, seed + 2, DIFFICULTY.hard, t)] as const;
   let s = createInitialState(seed);
   let rally: { start: SimState; intents: [Intent, Intent][] } = { start: s, intents: [] };
   for (;;) {

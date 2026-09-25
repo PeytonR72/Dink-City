@@ -1,7 +1,7 @@
 // Practice mode: a ball machine on Side 1 feeds shots while step-by-step prompts teach the Two-bounce rule and
 // Kitchen faults. The machine is a precise Bot whose Intents are edited, so it only ever feeds through the
 // Intent interface (ADR-0003). There is no score: each rep is a fresh Rally, judged from its events.
-import { DIFFICULTY, createBot, type Difficulty } from '../bot/bot';
+import { createBot, type Difficulty } from '../bot/bot';
 import type { Observation } from '../bot/observe';
 import { faultText } from '../hud/faultText';
 import type { Intent, ShotType, SideIndex, SimEvent, SimTuning } from '../sim';
@@ -138,8 +138,19 @@ export class Practice {
   }
 }
 
-/** A precise machine: no mistakes, quick and steady. */
-const MACHINE: Difficulty = { ...DIFFICULTY.hard, lateCommit: 0, offCenter: 0, unforcedError: 0, aimNoise: 0, kitchenDiscipline: 1 };
+/** A precise machine: no mistakes, quick and steady. Its own values, so recalibrating the presets leaves it be. */
+const MACHINE: Difficulty = {
+  reactionTicks: 8,
+  moveSpeed: 0.95,
+  predictionError: 0.2,
+  aimWidth: 0.85,
+  aimNoise: 0,
+  lateCommit: 0,
+  offCenter: 0,
+  unforcedError: 0,
+  shotChoiceAccuracy: 0.9,
+  kitchenDiscipline: 1,
+};
 
 /**
  * The ball machine: a Bot whose shot presses follow the current step's feeds, aimed down the middle. It only
