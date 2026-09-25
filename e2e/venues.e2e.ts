@@ -3,6 +3,8 @@ import { expect, test, type Page } from '@playwright/test';
 interface Dink {
   stats: { calls: number; triangles: number };
   advance(ticks: number, drive?: unknown): unknown;
+  newMatch(seed: number): void;
+  eventLog: { kind: string; reason?: string; loser?: number }[];
 }
 
 const VENUES = ['park', 'rooftop', 'beach'] as const;
@@ -37,6 +39,8 @@ for (const venue of VENUES) {
       const { simTuning } = await load('/src/tuning.ts');
       const dink = (window as unknown as { dink: Dink }).dink;
       const bot = createBot(0, 1, DIFFICULTY.hard, simTuning);
+      // A fresh Match, so the Bot sees its Serve coming.
+      dink.newMatch(1);
       let worst = { calls: 0, triangles: 0 };
       for (let i = 0; i < 20; i++) {
         dink.advance(30, (s: unknown) => bot.think(observe(s, 0)));
@@ -69,7 +73,7 @@ test("a new Match doesn't replay the last Match's call-out", async ({ page }) =>
     const { createBot, DIFFICULTY } = await load('/src/bot/bot.ts');
     const { observe } = await load('/src/bot/observe.ts');
     const { simTuning } = await load('/src/tuning.ts');
-    const dink = (window as unknown as { dink: Dink & { eventLog: { kind: string; reason?: string; loser?: number }[]; newMatch(seed: number): void } }).dink;
+    const dink = (window as unknown as { dink: Dink }).dink;
     const bot = createBot(0, 3, DIFFICULTY.hard, simTuning);
     // A fresh Match, so the Bot sees its Serve coming.
     dink.newMatch(3);
