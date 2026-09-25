@@ -17,6 +17,11 @@ export class CityMap {
   readonly el = document.createElement('div');
   private pins = new Map<VenueId, HTMLButtonElement>();
   private view = new MapView();
+  /** The pin under the pointer, and the one with keyboard focus: the camera moves toward the first of them. */
+  private hovered: VenueId | null = null;
+  private focused: VenueId | null = null;
+  /** The next focus is the menu opening, not the player moving, so it leaves the camera on the whole board. */
+  private quietFocus = false;
 
   constructor(onPick: (id: VenueId) => void) {
     this.el.className = 'city-map';
@@ -32,6 +37,23 @@ export class CityMap {
       b.innerHTML = `<span class="pin-name">${venue.name}</span><span class="pin-stars"></span><span class="pin-blurb"></span>`;
       b.addEventListener('click', () => {
         if (!b.classList.contains('locked')) onPick(id);
+      });
+      b.addEventListener('pointerenter', () => {
+        this.hovered = id;
+        this.aim();
+      });
+      b.addEventListener('pointerleave', () => {
+        this.hovered = null;
+        this.aim();
+      });
+      b.addEventListener('focus', () => {
+        this.focused = this.quietFocus ? null : id;
+        this.quietFocus = false;
+        this.aim();
+      });
+      b.addEventListener('blur', () => {
+        this.focused = null;
+        this.aim();
       });
       this.pins.set(id, b);
       this.el.append(b);
@@ -53,7 +75,13 @@ export class CityMap {
   }
 
   focusFirst() {
-    [...this.pins.values()].find((b) => !b.classList.contains('locked'))?.focus();
+    const first = [...this.pins.values()].find((b) => !b.classList.contains('locked'));
+    this.quietFocus = first !== undefined && first !== document.activeElement;
+    first?.focus();
+  }
+
+  private aim() {
+    this.view.focus(this.hovered ?? this.focused);
   }
 
   /** Draws the map. Called every frame while the menu shows. */

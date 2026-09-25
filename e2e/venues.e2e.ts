@@ -64,6 +64,8 @@ async function openMap(page: Page) {
 }
 
 test('the map matches its reference screenshot', async ({ page }) => {
+  // Reduced motion keeps the trees and the sea still, so the pixels compare.
+  await page.emulateMedia({ reducedMotion: 'reduce' });
   await openMap(page);
   await expect(page.locator('.city-map')).toHaveScreenshot('map.png', { maxDiffPixelRatio: 0.02 });
 });
@@ -74,6 +76,20 @@ test('the map stays within the performance budget', async ({ page }) => {
   console.log(`map budget: ${stats.calls} draw calls, ${stats.triangles} triangles`);
   expect(stats.calls).toBeLessThan(150);
   expect(stats.triangles).toBeLessThan(50_000);
+});
+
+test('hovering a pin moves the camera toward its Venue, keeping that pin under the pointer', async ({ page }) => {
+  await openMap(page);
+  const park = page.getByRole('button', { name: /The Park/ });
+  const rooftop = page.getByRole('button', { name: /The Rooftop/ });
+  // The first pin has keyboard focus when the map opens, but the camera stays on the whole board until it moves.
+  await page.waitForTimeout(300);
+  const before = { park: (await park.boundingBox())!, rooftop: (await rooftop.boundingBox())! };
+  await park.hover();
+  await page.waitForTimeout(1500);
+  const after = { park: (await park.boundingBox())!, rooftop: (await rooftop.boundingBox())! };
+  expect(Math.hypot(after.park.x - before.park.x, after.park.y - before.park.y)).toBeLessThan(3);
+  expect(Math.hypot(after.rooftop.x - before.rooftop.x, after.rooftop.y - before.rooftop.y)).toBeGreaterThan(40);
 });
 
 test('the map opens first, with only the Park open, and the Park starts a Match', async ({ page }) => {

@@ -446,8 +446,15 @@ body[data-mode='locker'] #hud {
   }
 
   .overlay .pin {
-    width: 130px;
-    font-size: 14px;
+    width: 104px;
+    padding: 3px 6px;
+    font-size: 12px;
+    border-width: 2px;
+    box-shadow: 0 3px 0 #1d2433;
+  }
+
+  .pin-stars {
+    font-size: 11px;
   }
 
   .pin-blurb {

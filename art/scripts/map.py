@@ -43,6 +43,9 @@ LAWN_Z = 14.0
 AVENUE_Z = 8.0
 STREETS_X = (-17.0, 23.0)
 GROUND = 0.07
+# The sea's surface: high enough that its swell (up to 0.08 either way, see src/menu/mapView.ts) never shows the
+# board under it.
+SEA_Y = 0.12
 
 
 def shore(z):
@@ -289,8 +292,8 @@ def beach_zone(sway, water):
         rows = [(min(shore(zz) + o0, BOARD_X), min(shore(zz) + o1, BOARD_X), zz) for zz in zs]
         if all(x0 >= BOARD_X for x0, _, _ in rows):
             break
-        water.strip(rows, 0.03, next(c for edge, c in bands if o0 < edge))
-    water.strip([(shore(zz) - 0.6, shore(zz) + 0.4 + 0.3 * math.sin(zz * 0.7), zz) for zz in zs], 0.045, "foam")
+        water.strip(rows, SEA_Y, next(c for edge, c in bands if o0 < edge))
+    water.strip([(shore(zz) - 0.6, shore(zz) + 0.4 + 0.3 * math.sin(zz * 0.7), zz) for zz in zs], SEA_Y + 0.01, "foam")
     return [b.build("beach"), *mini_court(x, z), *rocks]
 
 
