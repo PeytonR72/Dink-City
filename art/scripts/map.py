@@ -319,9 +319,8 @@ def build():
 if __name__ == "__main__":
     reset()
     meshes, pins = build()
-    # The check: the map from where the menu's camera rests, and from where it moves to for each Venue (see
-    # src/menu/mapView.ts).
-    preview_from("map", meshes, eye=(0, 12, 8.5), target=(0, 0, -0.4), fov=30, background="#bfe6f7")
+    # The check: the map from where the menu's camera rests (REST in src/menu/mapCamera.ts), and close to each Venue.
+    preview_from("map", meshes, eye=(0, 14.5, 10.5), target=(0, 0, -1.9), fov=30, background="#bfe6f7")
     preview_from("map-park", meshes, eye=(-4.3, 7, 7.2), target=(-4.5, 0, 1.2), fov=30, background="#bfe6f7")
     preview_from("map-rooftop", meshes, eye=(0.3, 8.8, 4.5), target=(0.3, 1.5, -1.6), fov=30, background="#bfe6f7")
     preview_from("map-beach", meshes, eye=(4.2, 7, 6.2), target=(4.4, 0, 1.0), fov=30, background="#bfe6f7")

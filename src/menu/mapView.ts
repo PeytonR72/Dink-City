@@ -48,9 +48,9 @@ export class MapView {
 
   private show(model: THREE.Object3D) {
     const materials: Record<string, THREE.Material> = { sway: this.moving(SWAY), water: this.moving(RIPPLE) };
-    const still = new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true });
+    const plain = new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true });
     model.traverse((o) => {
-      if (o instanceof THREE.Mesh) o.material = materials[o.name] ?? still;
+      if (o instanceof THREE.Mesh) o.material = materials[o.name] ?? plain;
     });
     for (const id of VENUE_IDS) {
       const pin = model.getObjectByName(`pin_${id}`);

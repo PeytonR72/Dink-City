@@ -1,6 +1,6 @@
 // The Venue Bots' Personalities (CONTEXT.md): shot weights plus a small, fitting Difficulty tweak.
 // Tuned with Bot-vs-Bot stats (test/personality.test.ts). Rallies won against a neutral Bot of the same
-// Difficulty, over five Games (seeds 11–15, 2026-09-24, after the Lob error change): medium: Dinker 56%, Banger 53%,
+// Difficulty, over five Games (seeds 11–15, measured 2026-09-24): medium: Dinker 56%, Banger 53%,
 // Lobber 50% (a neutral Bot: 45%); hard: Dinker 70%, Lobber 53%, Banger 44% (neutral: 48%).
 import type { Personality } from './bot';
 

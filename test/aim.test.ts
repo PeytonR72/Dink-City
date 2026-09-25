@@ -37,23 +37,23 @@ interface Contact {
 
 /** Side 0 hits a ball sitting at (or near) its sweet spot; returns where the shot first lands, in Side 1's frame. */
 function landing(c: Contact): { x: number; depth: number } {
-  const t = c.tuning ?? defaultTuning;
+  const tuning = c.tuning ?? defaultTuning;
   let s: SimState = structuredClone(createInitialState(c.seed));
   s.phase = 'rally';
   s.shots = 4;
   s.tick = 100;
   const player = { x: 0, y: 0, z: c.depth };
-  const sweet = localToWorld(endOf(s, 0), t.sweetSpotSide + (c.offCenter ?? 0) * t.reachSide, t.sweetSpotForward);
+  const sweet = localToWorld(endOf(s, 0), tuning.sweetSpotSide + (c.offCenter ?? 0) * tuning.reachSide, tuning.sweetSpotForward);
   s.sides[0].players[0].pos = player;
   s.sides[0].players[0].vel = { x: c.running ?? 0, y: 0, z: 0 };
   // Committed early in the ball's flight, so timing is perfect, unless rushed.
   s.sides[0].players[0].commit = { type: c.type, tick: c.rushed ? 95 : 50, bestDistance: null };
   s.sides[1].players[0].swing = { type: 'drive', variant: c.incoming ?? 'drive', tick: 40 };
   s.ball = { pos: { x: player.x + sweet.x, y: 0.7, z: player.z + sweet.z }, vel: { x: 0, y: 0, z: 0 }, spin: 0, lastHitBy: 1, bouncesSinceHit: 1, hitTick: 40 };
-  s = step(s, [{ ...idle, aim: c.aim ?? { x: 0, y: 0 } }, idle], t);
+  s = step(s, [{ ...idle, aim: c.aim ?? { x: 0, y: 0 } }, idle], tuning);
   expect(s.events.some((e) => e.kind === 'hit')).toBe(true);
   for (let i = 0; i < 400; i++) {
-    s = step(s, [idle, idle], t);
+    s = step(s, [idle, idle], tuning);
     const bounce = s.events.find((e) => e.kind === 'bounce');
     if (bounce?.kind === 'bounce') return { x: bounce.pos.x, depth: -bounce.pos.z };
   }

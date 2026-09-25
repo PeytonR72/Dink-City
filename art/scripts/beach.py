@@ -211,6 +211,7 @@ def build():
     for x, z, c, t in ((8.5, -8.0, "umbrellaA", "towelA"), (8.4, -2.2, "umbrellaC", "towelB"), (8.05, 6.3, "umbrellaB", "towelA")):
         for tx, tz in turned(x, z):
             footprints += umbrella(b, tx, tz, c, t)
+    # Not turned: the partner of either patch would stand on a lifeguard tower or an umbrella's towel.
     for x, z in ((9.4, -4.7), (-9.1, -2.0)):
         footprints += grass(b, x, z)
     # By the sea (not turned: the sea is only on one side).
