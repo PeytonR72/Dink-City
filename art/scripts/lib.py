@@ -110,6 +110,23 @@ class Builder:
         self._paint(verts, color)
         return self
 
+    def strip(self, rows, y, color):
+        """A flat ribbon at height `y`, facing up: `rows` are (x0, x1, z) cross-sections, in order along z.
+
+        For shapes that follow a curve (a shoreline, a band of foam), which boxes can only staircase.
+        """
+        edges = [(self.bm.verts.new(to_blender(x0, y, z)), self.bm.verts.new(to_blender(x1, y, z))) for x0, x1, z in rows]
+        faces = []
+        for (a0, a1), (b0, b1) in zip(edges, edges[1:]):
+            f = self.bm.faces.new((a0, a1, b1, b0))
+            f.normal_update()
+            if f.normal.z < 0:
+                f.normal_flip()
+            faces.append(f)
+        for f in faces:
+            f[self.layer] = self.names.index(color)
+        return self
+
     def build(self, name):
         """Finishes the mesh as a Blender object with flat faces and a face-corner color attribute."""
         mesh = bpy.data.meshes.new(name)

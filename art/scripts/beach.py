@@ -104,9 +104,38 @@ def rock(b, x, z, scale):
     b.blob(0.4 * scale, (x + 0.4 * scale, 0.1 * scale, z + 0.2 * scale), "rockDark", squash=0.6)
 
 
+def band(b, inner, outer, y, color):
+    """A strip of sea or sand between two offsets from the waterline (functions of z; + is toward the land)."""
+    rows = [(shore(z) + outer(z), shore(z) + inner(z), z) for z in SHORE_ZS]
+    b.strip(rows, y, color)
+
+
+def crest(b, z0, length, offset):
+    """A low wave crest out on the water: a thin curved band of foam, parallel to the shore, tapered at the ends."""
+    n = max(2, round(length / 0.25))
+    rows = []
+    for i in range(n + 1):
+        u = i / n
+        z = z0 + length * u
+        w = 0.03 + 0.2 * math.sin(math.pi * u)
+        x = shore(z) - offset
+        rows.append((x - w / 2, x + w / 2, z))
+    b.strip(rows, 0.006, "foam")
+
+
+# The shoreline is drawn out to well past what the camera sees, every half meter.
+SHORE_ZS = [-60 + 0.5 * i for i in range(241)]
+# Where each band of sea ends, from the waterline out. Each edge wobbles on its own, so no two run parallel.
+WET_EDGE = lambda z: 1.2 + 0.35 * math.sin(z / 2.3) + 0.2 * math.sin(z / 5.1 + 1)  # noqa: E731
+SHALLOW_EDGE = lambda z: -2.4 - 0.5 * math.sin(z / 3.7 + 0.5)  # noqa: E731
+SEA_EDGE = lambda z: -6.5 - 0.9 * math.sin(z / 6.3 + 2)  # noqa: E731
+MID_EDGE = lambda z: -12.0 - 1.2 * math.sin(z / 8.1 + 1)  # noqa: E731
+WASH_EDGE = lambda z: -0.3 - 0.2 * math.sin(z * 0.9)  # noqa: E731
+
+
 def build():
     b = Builder(COLORS)
-    # Sand, with the sea along -x: a wet strip, the shallows, then deep water out to the horizon.
+    # Sand, with the sea along -x.
     b.box((160, 0.02, 160), (0, -0.013, 0), "sand", 0)
     for _ in range(36):
         x = rng.uniform(-8, 25)
@@ -114,18 +143,18 @@ def build():
         for tx, tz in turned(x, z):
             if tx > shore(tz) + 1.5:
                 b.box((rng.uniform(1.2, 3.5), 0.01, rng.uniform(1.2, 3.5)), (tx, -0.002, tz), "sandDark", 0, rot=(0, rng.random(), 0))
-    step = 2.0
-    z = -40.0
-    while z < 40:
-        x = shore(z + step / 2)
-        b.box((1.6, 0.012, step + 0.05), (x + 0.2, -0.001, z + step / 2), "sandWet", 0)
-        b.box((0.5, 0.02, step + 0.05), (x - 0.7, 0.0, z + step / 2), "foam", 0)
-        b.box((6.0, 0.02, step + 0.05), (x - 3.9, -0.004, z + step / 2), "sea", 0)
-        z += step
-    b.box((120, 0.02, 160), (SHORE_X - 66, -0.008, 0), "seaDeep", 0)
+    # The sea in bands that follow the shoreline: wet sand, a wash of foam at the waterline, then the shallows
+    # darkening through two blues to deep water out to the horizon.
+    band(b, WET_EDGE, lambda z: 0.0, 0.001, "sandWet")
+    band(b, lambda z: 0.0, SHALLOW_EDGE, 0.003, "seaShallow")
+    band(b, SHALLOW_EDGE, SEA_EDGE, 0.003, "sea")
+    band(b, SEA_EDGE, MID_EDGE, 0.003, "seaMid")
+    band(b, MID_EDGE, lambda z: -140.0 - shore(z), 0.003, "seaDeep")
+    band(b, lambda z: 0.12, WASH_EDGE, 0.005, "foam")
     for _ in range(18):
         fz = rng.uniform(-30, 30)
-        b.box((0.35, 0.02, rng.uniform(1.5, 3.5)), (shore(fz) - rng.uniform(3, 14), 0.002, fz), "foam", 0)
+        length = rng.uniform(1.5, 3.5) * 1.6
+        crest(b, fz - length / 2, length, rng.uniform(3, 14))
 
     # The rope fence around the court, and a strip of beach grass on the land side.
     for s in (-1, 1):
