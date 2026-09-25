@@ -137,12 +137,13 @@ def build():
     return [b.build("park")]
 
 
-reset()
-objects = build()
-# The check: the whole Venue from the game camera (see viewTuning in src/tuning.ts), with the court and net.
-for other in ("court", "equipment"):
-    bpy.ops.import_scene.gltf(filepath=os.path.join(MODELS, f"{other}.glb"))
-venue = [o for o in bpy.context.scene.objects if o.type == "MESH"]
-preview_from("park", venue, eye=(0, 15.5, 20), target=(0, 0, 1.25), fov=33)
-preview_from("park-wide", venue, eye=(0, 30, 34), target=(0, 0, -2), fov=40)
-export("park", objects)
+if __name__ == "__main__":
+    reset()
+    objects = build()
+    # The check: the whole Venue from the game camera (see viewTuning in src/tuning.ts), with the court and net.
+    for other in ("court", "equipment"):
+        bpy.ops.import_scene.gltf(filepath=os.path.join(MODELS, f"{other}.glb"))
+    venue = [o for o in bpy.context.scene.objects if o.type == "MESH"]
+    preview_from("park", venue, eye=(0, 15.5, 20), target=(0, 0, 1.25), fov=33)
+    preview_from("park-wide", venue, eye=(0, 30, 34), target=(0, 0, -2), fov=40)
+    export("park", objects)

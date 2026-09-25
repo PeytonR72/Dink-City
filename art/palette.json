@@ -109,5 +109,14 @@
     "tube": "#39414d",
     "light": "#ffd23f",
     "ball": "#f4e04d"
+  },
+  "map": {
+    "board": "#c08a5a",
+    "boardDark": "#96673f",
+    "pavement": "#d8d2c6",
+    "grass": "#7cc05a",
+    "grassDark": "#69ad4c",
+    "path": "#e8d3a0",
+    "sea": "#2a8fb8"
   }
 }

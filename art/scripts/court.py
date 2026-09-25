@@ -43,7 +43,8 @@ def build():
     return [b.build("court")]
 
 
-reset()
-objects = build()
-preview("court", objects, direction=(0.5, 1.2, 1.0))
-export("court", objects)
+if __name__ == "__main__":
+    reset()
+    objects = build()
+    preview("court", objects, direction=(0.5, 1.2, 1.0))
+    export("court", objects)

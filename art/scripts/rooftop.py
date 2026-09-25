@@ -158,12 +158,13 @@ def build():
     return [b.build("rooftop")]
 
 
-reset()
-objects = build()
-# The check: the whole Venue from the game camera (see viewTuning in src/tuning.ts), with the court and net.
-for other in ("court", "equipment"):
-    bpy.ops.import_scene.gltf(filepath=os.path.join(MODELS, f"{other}.glb"))
-venue = [o for o in bpy.context.scene.objects if o.type == "MESH"]
-preview_from("rooftop", venue, eye=(0, 15.5, 20), target=(0, 0, 1.25), fov=33, background="#9cc8ec")
-preview_from("rooftop-wide", venue, eye=(0, 30, 34), target=(0, 0, -2), fov=40, background="#9cc8ec")
-export("rooftop", objects)
+if __name__ == "__main__":
+    reset()
+    objects = build()
+    # The check: the whole Venue from the game camera (see viewTuning in src/tuning.ts), with the court and net.
+    for other in ("court", "equipment"):
+        bpy.ops.import_scene.gltf(filepath=os.path.join(MODELS, f"{other}.glb"))
+    venue = [o for o in bpy.context.scene.objects if o.type == "MESH"]
+    preview_from("rooftop", venue, eye=(0, 15.5, 20), target=(0, 0, 1.25), fov=33, background="#9cc8ec")
+    preview_from("rooftop-wide", venue, eye=(0, 30, 34), target=(0, 0, -2), fov=40, background="#9cc8ec")
+    export("rooftop", objects)

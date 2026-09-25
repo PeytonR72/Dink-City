@@ -25,6 +25,7 @@ Each model script renders a workbench preview (vertex colors, studio light) to `
 | `park.py` | `models/park.glb` | The Park Venue's surroundings, as one mesh. Its preview is the whole Venue from the game camera. |
 | `rooftop.py` | `models/rooftop.glb` | The Rooftop: a roof deck, a chain-link fence, water tanks and AC units over a city skyline. |
 | `beach.py` | `models/beach.glb` | The Beach: sand, the sea along one side, palms, beach huts, umbrellas and a rope fence. |
+| `map.py` | `models/map.glb` | The Dink City map: a tabletop diorama with the three Venues in miniature, built with the Venues' own helpers, among Kenney's CC0 buildings and roads (`vendor/kenney/`). Three meshes: `map`, `sway` (trees and palms) and `water`, plus `pin_<venue>` empties where the pins point. |
 | `ambience.py` | `audio/<venue>-ambience.ogg` | A 24 s seamless loop per Venue, synthesized in Python: breeze, leaves and birds (Park); city rumble, AC hum, horns and pigeons (Rooftop); waves and gulls (Beach). They're CC0 because they're made here from nothing. |
 
 ## Conventions
@@ -34,4 +35,6 @@ Each model script renders a workbench preview (vertex colors, studio light) to `
 - Player parts carry a `_region` vertex attribute: the index of a key of `palette.json` "player". `recolor` in `src/render/models.ts` uses it to give each Player their own shirt, skin, hair and paddle.
 - Normals aren't exported (flat shading doesn't need them), which keeps the files about 4× smaller.
 - The renderer turns the world 180° when Ends switch, so a Venue should look alike from either End: props come in pairs at (x, z) and (−x, −z). The Park is also mirror-symmetric in x. The Beach's sea is on one side only, which is what you'd see after switching ends.
+- The Venue scripts only build when run directly (`if __name__ == "__main__"`), so `map.py` can import their helpers.
+- Third-party models live in `vendor/`, with their licenses. Only CC0 models, and only the files that are used.
 - Keep each Venue's surroundings to one mesh (one draw call) and about 25k triangles, so a Venue plus the court, net and Players stays inside the budget.
