@@ -1,12 +1,26 @@
 // Plain DOM HUD: score, server, the Fault banner, and call-outs.
 import type { SideIndex, SimEvent, SimState } from '../sim';
 import { calloutFor } from './callout';
-import { faultText } from './faultText';
+import { faultText, type FaultText } from './faultText';
+import { reveal, revealSeconds } from './reveal';
 
 const NAMES = ['YOU', 'BOT'] as const;
 const BANNER_SECONDS = 2.2;
 /** The banner lingers this long after a Replay. */
 const AFTER_REPLAY_SECONDS = 0.6;
+/** An emphasised banner stays up this long once it has all shown. */
+const AFTER_REVEAL_SECONDS = 1.3;
+const NO_BANNER: FaultText = { title: '', detail: '' };
+
+/** An emphasised banner part-way through its reveal. */
+interface Reveal {
+  words: HTMLElement[];
+  detail: string;
+  /** Sentences added meanwhile ("Side out."), shown once the detail has typed out. */
+  after: string;
+  t: number;
+  end: number;
+}
 
 export class Hud {
   private rows: HTMLElement[];
@@ -20,6 +34,7 @@ export class Hud {
   private replaying = false;
   private bannerTimer = 0;
   private sticky = false;
+  private revealing: Reveal | null = null;
 
   constructor(
     root: HTMLElement,
@@ -60,9 +75,11 @@ export class Hud {
     const { games, config } = s.match;
     this.games.textContent = config.bestOf > 1 ? `Games ${games[this.order()[0]]}–${games[this.order()[1]]}` : '';
 
+    // The reveal plays on through a Replay.
+    if (this.revealing) this.advanceReveal(dt);
     if (this.sticky || this.replaying) return;
     this.bannerTimer -= dt;
-    if (this.bannerTimer <= 0) this.show('', '');
+    if (this.bannerTimer <= 0) this.show(NO_BANNER);
   }
 
   onEvents(s: SimState, events: readonly SimEvent[]) {
@@ -70,8 +87,7 @@ export class Hud {
       const shout = calloutFor(e, this.local);
       if (shout) this.shout(shout);
       if (e.kind === 'dead') {
-        const { title, detail } = faultText(e.reason, e.loser === this.local);
-        this.show(title, detail, BANNER_SECONDS);
+        this.show(faultText(e.reason, e.loser === this.local), BANNER_SECONDS);
       } else if (e.kind === 'rally-won' && e.sideOut) {
         this.appendDetail('Side out.');
       } else if (e.kind === 'game' && s.match.winner === null) {
@@ -80,7 +96,10 @@ export class Hud {
         // Best of 3 reports Games won; a single Game reports its points.
         const tally = s.match.config.bestOf > 1 ? s.match.games : s.match.points;
         const [a, b] = this.order().map((side) => tally[side]);
-        this.show(e.winner === this.local ? 'YOU WIN' : 'BOT WINS', `${a}–${b}. Press J, K or L to play again, or Esc for the menu.`);
+        this.show({
+          title: e.winner === this.local ? 'YOU WIN' : 'BOT WINS',
+          detail: `${a}–${b}. Press J, K or L to play again, or Esc for the menu.`,
+        });
         this.sticky = true;
       }
     }
@@ -90,13 +109,13 @@ export class Hud {
   setReplay(on: boolean) {
     this.replaying = on;
     this.replayTag.classList.toggle('show', on);
-    if (!on) this.bannerTimer = AFTER_REPLAY_SECONDS;
+    if (!on) this.bannerTimer = Math.max(AFTER_REPLAY_SECONDS, this.revealLeft());
   }
 
   reset() {
     this.sticky = false;
     this.setReplay(false);
-    this.show('', '');
+    this.show(NO_BANNER);
     // The HUD is hidden on the map; showing it again would restart a leftover call-out's animation.
     this.shoutEl.textContent = '';
     this.shoutEl.classList.remove('pop');
@@ -113,15 +132,48 @@ export class Hud {
   }
 
   /** Shows the banner for a few seconds (Practice mode's rep outcomes). */
-  banner(title: string, detail: string) {
-    this.show(title, detail, BANNER_SECONDS);
+  banner(text: FaultText) {
+    this.show(text, BANNER_SECONDS);
   }
 
-  private show(title: string, detail: string, seconds = 0) {
+  private show({ title, detail, emphasis }: FaultText, seconds = 0) {
+    this.revealing = null;
     this.callout.textContent = title;
     this.detail.textContent = detail;
-    this.bannerTimer = seconds;
+    if (emphasis) this.startReveal(title, detail);
+    this.bannerTimer = Math.max(seconds, this.revealLeft());
     this.callout.parentElement!.classList.toggle('show', title !== '');
+  }
+
+  /** Pops the title's words in one at a time, then types the detail out. Presentation only, timed by frames. */
+  private startReveal(title: string, detail: string) {
+    this.callout.replaceChildren();
+    const words = title.split(' ').map((word, i) => {
+      const el = document.createElement('span');
+      el.className = 'word';
+      el.textContent = word;
+      this.callout.append(...(i > 0 ? [' ', el] : [el]));
+      return el;
+    });
+    const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const end = revealSeconds(words.length, detail.length);
+    this.revealing = { words, detail, after: '', t: reduced ? end : 0, end };
+    this.advanceReveal(0);
+  }
+
+  private advanceReveal(dt: number) {
+    const r = this.revealing!;
+    r.t += dt;
+    const shown = reveal(r.words.length, r.detail.length, r.t);
+    r.words.forEach((el, i) => el.classList.toggle('in', i < shown.words));
+    const done = r.t >= r.end;
+    this.detail.textContent = done ? `${r.detail}${r.after}` : r.detail.slice(0, shown.chars);
+    if (done) this.revealing = null;
+  }
+
+  /** Seconds the banner should stay up for the reveal to finish and be read. */
+  private revealLeft(): number {
+    return this.revealing ? this.revealing.end - this.revealing.t + AFTER_REVEAL_SECONDS : 0;
   }
 
   /** Pops a call-out; restarting the CSS animation lets back-to-back call-outs replay. */
@@ -138,6 +190,7 @@ export class Hud {
   }
 
   private appendDetail(text: string) {
-    this.detail.textContent = `${this.detail.textContent} ${text}`.trim();
+    if (this.revealing) this.revealing.after += ` ${text}`;
+    else this.detail.textContent = `${this.detail.textContent} ${text}`.trim();
   }
 }

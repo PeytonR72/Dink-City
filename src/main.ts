@@ -270,7 +270,7 @@ function tick(local: Intent = input.sample()) {
     // Practice judges each rep itself; the Match banners (a Bot "letting it bounce twice") would mislead.
     const outcome = practice.onEvents(curr.events);
     if (outcome) {
-      hud.banner(outcome.title, outcome.detail);
+      hud.banner(outcome);
       showPractice();
     }
   } else hud.onEvents(curr, curr.events);

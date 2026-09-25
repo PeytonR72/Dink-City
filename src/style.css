@@ -46,6 +46,43 @@ body {
   font-weight: 700;
 }
 
+/* An emphasised title (NET CITY) pops in word by word. */
+#callout .word {
+  display: inline-block;
+  opacity: 0;
+  font-size: 1.35em;
+  font-style: italic;
+  color: #ffd23f;
+  -webkit-text-stroke: 2px #1d2433;
+  text-shadow: 0 4px 0 #1d2433;
+}
+
+#callout .word.in {
+  opacity: 1;
+  transform: rotate(-3deg);
+  animation: word-pop 0.4s ease-out;
+}
+
+@keyframes word-pop {
+  0% {
+    opacity: 0;
+    transform: scale(0.3) rotate(-8deg);
+  }
+  45% {
+    opacity: 1;
+    transform: scale(1.25) rotate(-3deg);
+  }
+  100% {
+    transform: scale(1) rotate(-3deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #callout .word.in {
+    animation: none;
+  }
+}
+
 #shout {
   position: absolute;
   top: 34%;

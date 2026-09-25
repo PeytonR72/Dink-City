@@ -21,6 +21,20 @@ describe('Fault banner text', () => {
     });
   });
 
+  it('calls every net Fault NET CITY, with the same line whoever hit it', () => {
+    for (const you of [true, false]) {
+      expect(faultText('net', you)).toEqual({
+        title: 'NET CITY',
+        detail: 'The ball actually needs to go OVER the net.',
+        emphasis: true,
+      });
+    }
+  });
+
+  it('shows other Faults plainly', () => {
+    expect(faultText('out', true).emphasis).toBeUndefined();
+  });
+
   it('has a title and a one-sentence explanation for every reason', () => {
     const reasons: DeadReason[] = ['out', 'net', 'double-bounce', 'service-kitchen', 'service-court', 'two-bounce', 'kitchen'];
     for (const reason of reasons) {

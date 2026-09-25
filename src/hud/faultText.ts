@@ -4,6 +4,8 @@ import type { DeadReason } from '../sim';
 export interface FaultText {
   title: string;
   detail: string;
+  /** Pop the title in word by word, then type the detail out. */
+  emphasis?: true;
 }
 
 interface Words {
@@ -15,7 +17,8 @@ interface Words {
 
 const TEXT: Record<DeadReason, (w: Words) => FaultText> = {
   out: (w) => ({ title: 'OUT', detail: `${w.whose} shot landed outside the court.` }),
-  net: (w) => ({ title: 'NET', detail: `${w.whose} shot didn't clear the net.` }),
+  // A running joke, so it's the same line whoever hit the net.
+  net: () => ({ title: 'NET CITY', detail: 'The ball actually needs to go OVER the net.', emphasis: true }),
   'double-bounce': (w) => ({ title: 'POINT', detail: `${w.who} let the ball bounce twice.` }),
   'service-kitchen': (w) => ({ title: 'SERVICE FAULT', detail: `${w.whose} serve landed in the kitchen.` }),
   'service-court': (w) => ({

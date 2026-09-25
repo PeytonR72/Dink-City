@@ -3,7 +3,7 @@
 // Intent interface (ADR-0003). There is no score: each rep is a fresh Rally, judged from its events.
 import { createBot, type Difficulty } from '../bot/bot';
 import type { Observation } from '../bot/observe';
-import { faultText } from '../hud/faultText';
+import { faultText, type FaultText } from '../hud/faultText';
 import type { Intent, ShotType, SideIndex, SimEvent, SimTuning } from '../sim';
 
 type Hit = Extract<SimEvent, { kind: 'hit' }>;
@@ -77,11 +77,9 @@ export const PRACTICE_STEPS: PracticeStep[] = [
 /** Good reps to pass a step. */
 export const REPS_TO_PASS = 3;
 
-export interface Outcome {
+export interface Outcome extends FaultText {
   /** A good rep, a legal shot that wasn't the skill asked for (or a machine miss), or a Fault. */
   kind: 'good' | 'miss' | 'fault';
-  title: string;
-  detail: string;
   /** This rep passed the step. */
   passed?: boolean;
 }
