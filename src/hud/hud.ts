@@ -97,6 +97,9 @@ export class Hud {
     this.sticky = false;
     this.setReplay(false);
     this.show('', '');
+    // The HUD is hidden on the map; showing it again would restart a leftover call-out's animation.
+    this.shoutEl.textContent = '';
+    this.shoutEl.classList.remove('pop');
   }
 
   /** Practice mode's panel (in place of the scoreboard), or null to hide it. */

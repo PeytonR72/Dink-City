@@ -60,3 +60,27 @@ test('the map opens first, with only the Park open, and the Park starts a Match'
   await expect(page.locator('#menu')).toBeHidden();
   await expect(page.locator('#scoreboard')).toBeVisible();
 });
+
+test("a new Match doesn't replay the last Match's call-out", async ({ page }) => {
+  await openVenue(page, 'park');
+  // A Bot on the local Side plays until it hits a winner, which pops "WINNER".
+  await page.evaluate(async () => {
+    const load = (path: string) => import(/* @vite-ignore */ path);
+    const { createBot, DIFFICULTY } = await load('/src/bot/bot.ts');
+    const { observe } = await load('/src/bot/observe.ts');
+    const { simTuning } = await load('/src/tuning.ts');
+    const dink = (window as unknown as { dink: Dink & { eventLog: { kind: string; reason?: string; loser?: number }[]; newMatch(seed: number): void } }).dink;
+    const bot = createBot(0, 3, DIFFICULTY.hard, simTuning);
+    // A fresh Match, so the Bot sees its Serve coming.
+    dink.newMatch(3);
+    const winner = () => dink.eventLog.some((e) => e.kind === 'dead' && e.reason === 'double-bounce' && e.loser === 1);
+    for (let i = 0; i < 400 && !winner(); i++) dink.advance(30, (s: unknown) => bot.think(observe(s, 0)));
+    if (!winner()) throw new Error('no winner in time');
+  });
+  await expect(page.locator('#shout')).toHaveText('WINNER');
+  await page.keyboard.press('Escape');
+  await page.getByRole('button', { name: 'Quit to map' }).click();
+  await page.getByRole('button', { name: /The Park/ }).click();
+  await expect(page.locator('#scoreboard')).toBeVisible();
+  await expect(page.locator('#shout')).toHaveText('');
+});
