@@ -13,7 +13,7 @@ sys.path.insert(0, __import__("os").path.dirname(__file__))
 import os  # noqa: E402
 
 import bpy  # noqa: E402
-from lib import MODELS, PALETTE, Builder, export, preview_from, reset  # noqa: E402
+from lib import MODELS, PALETTE, Builder, check_footprints, export, preview_from, reset, turned  # noqa: E402
 
 COLORS = PALETTE["rooftop"]
 rng = random.Random(2027)
@@ -23,11 +23,6 @@ FENCE_X = 6.45
 FENCE_Z = 10.5
 STREET_Y = -40.0
 TOWERS = ("tower1", "tower2", "tower3", "tower4", "tower5", "brick")
-
-
-def turned(x, z):
-    """(x, z) and its partner under the 180-degree End switch."""
-    return ((x, z), (-x, -z))
 
 
 def chain_link(b, x0, z0, x1, z1, height=2.6):
@@ -102,14 +97,6 @@ def tower(b, x, z, w, d, top, color):
     b.box((w + 0.3, 0.3, d + 0.3), (x, top + 0.15, z), "parapet", 0)
     if rng.random() < 0.45:
         water_tank(b, x + rng.uniform(-w / 4, w / 4), z + rng.uniform(-d / 4, d / 4), 0.8, top + 0.3)
-
-
-def check_footprints(footprints, gap=0.3):
-    """Fails the build if two props' footprints (with `gap` between them) overlap."""
-    for i, (name, x, z, hw, hd) in enumerate(footprints):
-        for other, ox, oz, ohw, ohd in footprints[i + 1 :]:
-            if abs(x - ox) < hw + ohw + gap and abs(z - oz) < hd + ohd + gap:
-                raise RuntimeError(f"{name} at ({x}, {z}) overlaps {other} at ({ox}, {oz})")
 
 
 def build():

@@ -152,6 +152,23 @@ class Builder:
         return obj
 
 
+def turned(x, z):
+    """(x, z) and its partner under the 180-degree End switch."""
+    return ((x, z), (-x, -z))
+
+
+def check_footprints(footprints, gap=0.3, may_overlap=()):
+    """Fails the build if two props' footprints (name, x, z, half width, half depth) come within `gap` of each
+    other. `may_overlap` lists pairs of names that are allowed to, such as a high canopy over a low prop."""
+    allowed = {frozenset(pair) for pair in may_overlap}
+    for i, (name, x, z, hw, hd) in enumerate(footprints):
+        for other, ox, oz, ohw, ohd in footprints[i + 1 :]:
+            if frozenset((name, other)) in allowed:
+                continue
+            if abs(x - ox) < hw + ohw + gap and abs(z - oz) < hd + ohd + gap:
+                raise RuntimeError(f"{name} at ({x:.2f}, {z:.2f}) overlaps {other} at ({ox:.2f}, {oz:.2f})")
+
+
 def triangles(objects):
     return sum(sum(len(p.vertices) - 2 for p in o.data.polygons) for o in objects)
 
