@@ -36,12 +36,23 @@ function mean(values: number[]): number {
   return values.reduce((a, b) => a + b, 0) / values.length;
 }
 
+const handicaps = new Map<string, ReturnType<typeof measureHandicap>>();
+
 /**
  * A medium Bot with one handicap changed (the others off), against a plain medium Bot: its mean Shot quality
- * and factors, and the share of its shots that went out or into the net.
+ * and factors, and the share of its shots that went out or into the net. Two Games pooled, since one Game's
+ * averages are noisy.
  */
 function handicapped(change: Partial<Difficulty>) {
-  const { events } = botGame(5, { ...DIFFICULTY.medium, lateCommit: 0, offCenter: 0, unforcedError: 0, ...change }, DIFFICULTY.medium);
+  const key = JSON.stringify(change);
+  if (!handicaps.has(key)) handicaps.set(key, measureHandicap(change));
+  return handicaps.get(key)!;
+}
+
+function measureHandicap(change: Partial<Difficulty>) {
+  const events = [6, 7].flatMap(
+    (seed) => botGame(seed, { ...DIFFICULTY.medium, lateCommit: 0, offCenter: 0, unforcedError: 0, ...change }, DIFFICULTY.medium).events,
+  );
   const mine = hits(events).filter((h) => h.side === 0);
   const errors = events.filter((e) => e.kind === 'dead' && e.loser === 0 && (e.reason === 'out' || e.reason === 'net'));
   return {
@@ -52,8 +63,51 @@ function handicapped(change: Partial<Difficulty>) {
   };
 }
 
+/**
+ * Bot-vs-Bot Games, watching every ball a Bot lets go: how often its sideways movement changes direction while
+ * it leaves the ball, and how many of those balls landed in. Also its moves while the ball is dead.
+ */
+function leaves(seeds: number[], difficulty: Difficulty) {
+  let count = 0;
+  let flips = 0;
+  let landedIn = 0;
+  const deadMoves: number[] = [];
+  for (const seed of seeds) {
+    const bots = [createBot(0, seed + 1, difficulty, t), createBot(1, seed + 2, difficulty, t)];
+    let s: SimState = createInitialState(seed);
+    const watch = [0, 1].map(() => ({ on: false, sign: 0 }));
+    while (s.phase !== 'over' && s.tick < MAX_TICKS) {
+      const pair = [bots[0].think(observe(s, 0)), bots[1].think(observe(s, 1))] as [Intent, Intent];
+      for (const i of [0, 1] as const) {
+        const w = watch[i];
+        if (s.phase === 'dead') deadMoves.push(Math.hypot(pair[i].move.x, pair[i].move.y));
+        if (s.phase !== 'rally') continue;
+        if (bots[i].plan.leave && !w.on) {
+          count++;
+          Object.assign(w, { on: true, sign: 0 });
+        }
+        if (!w.on || Math.abs(pair[i].move.x) < 0.02) continue;
+        const sign = Math.sign(pair[i].move.x);
+        if (w.sign !== 0 && sign !== w.sign) flips++;
+        w.sign = sign;
+      }
+      s = step(s, pair, t);
+      for (const e of s.events) {
+        // Committed before it read the ball as out, the Bot still swings; that ball wasn't left after all.
+        if (e.kind === 'hit') watch[e.side].on = false;
+        if (e.kind !== 'dead') continue;
+        for (const i of [0, 1] as const) {
+          if (watch[i].on && e.loser === i && e.reason === 'double-bounce') landedIn++;
+          watch[i].on = false;
+        }
+      }
+    }
+  }
+  return { count, flips, landedIn, deadMoves };
+}
+
 const game = botGame(2026);
-const GOLDEN = { points: [11, 5], tick: 20188 };
+const GOLDEN = { points: [11, 6], tick: 30485 };
 const deads = game.events.filter((e) => e.kind === 'dead');
 
 describe('Bot-vs-Bot Game', () => {
@@ -88,6 +142,28 @@ describe('Bot-vs-Bot Game', () => {
     const strict = botGame(7, { ...DIFFICULTY.medium, kitchenDiscipline: 1 });
     const faults = strict.events.filter((e) => e.kind === 'dead' && (e.reason === 'kitchen' || e.reason === 'two-bounce'));
     expect(faults).toEqual([]);
+  });
+});
+
+describe('Letting a ball go', () => {
+  // Seed 6 used to leave a ball that landed in; seed 2 leaves plenty.
+  const left = leaves([2, 6], DIFFICULTY.medium);
+
+  it('happens: Bots do leave balls going out', () => {
+    expect(left.count).toBeGreaterThan(5);
+  });
+
+  it('settles calmly into position, without twitching sideways', () => {
+    expect(left.flips).toBe(0);
+  });
+
+  it("doesn't give up on a ball that lands in", () => {
+    expect(left.landedIn).toBe(0);
+  });
+
+  it('walks, rather than freezing mid-stride, while the ball is dead', () => {
+    expect(Math.max(...left.deadMoves)).toBeLessThanOrEqual(0.4);
+    expect(left.deadMoves.filter((m) => m > 0).length).toBeGreaterThan(0);
   });
 });
 

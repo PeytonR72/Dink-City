@@ -8,7 +8,6 @@ import {
   TICK,
   endOfZ,
   facing,
-  isInBounds,
   localToWorld,
   worldToLocal,
   type Ball,
@@ -153,8 +152,13 @@ const COMMIT_MARGIN = 0.2;
 function kitchenEdge(t: SimTuning): number {
   return KITCHEN_DEPTH + t.footRadius + 0.08;
 }
-/** Leave a ball the Bot reads as landing this far out. */
+/**
+ * Leave a ball the Bot reads as landing this far out, plus however far its read could still be off. Near-line
+ * balls are played until the read is sure, so the Bot never gives up on a ball that lands in.
+ */
 const OUT_MARGIN = 0.15;
+/** Top speed (a fraction of `playerSpeed`) while the ball is dead: a walk, not a sprint or a sudden stop. */
+const WALK = 0.35;
 
 interface PathPoint {
   tick: number;
@@ -206,6 +210,8 @@ export function createBot(
   let servePhase = -1;
   let serveAt = 0;
   let lastSpot: { x: number; z: number } | null = null;
+  /** Where the Bot settles after leaving a ball, or while it is dead: fixed, so it doesn't follow the ball. */
+  let settleSpot: { x: number; z: number } | null = null;
   const shown: BotPlan = { spot: null, contact: null, shot: null, leave: false };
 
   return {
@@ -216,6 +222,8 @@ export function createBot(
 
       if (o.phase === 'serve') {
         seenShots = -1;
+        settleSpot = null;
+        shown.leave = false;
         if (o.server !== side) return idle;
         if (servePhase !== o.phaseTick) {
           servePhase = o.phaseTick;
@@ -225,6 +233,10 @@ export function createBot(
         aim = noisyAim(spread() * 0.6, spread() * 0.5);
         return { ...idle, aim, shot: weightedPick({ soft: 1, drive: 1.2, lob: 0 }) };
       }
+      if (o.phase === 'dead') {
+        settleSpot ??= readySpot(o);
+        return moveTo(o, settleSpot, null, WALK);
+      }
       if (o.phase !== 'rally') return idle;
 
       if (o.shots !== seenShots) {
@@ -233,7 +245,8 @@ export function createBot(
         seenAt = o.tick;
         error = { x: spread() * difficulty.predictionError, z: spread() * difficulty.predictionError };
         disciplined = random() < difficulty.kitchenDiscipline;
-        leave = false;
+        leave = shown.leave = false;
+        settleSpot = null;
         // The mistakes a Difficulty allows, rolled once per ball.
         // An Unforced error is also always off-center.
         unforced = random() < difficulty.unforcedError;
@@ -252,12 +265,17 @@ export function createBot(
       const path = predict(o);
       if (o.ball.bouncesSinceHit === 0 && !leave) {
         const landing = path.find((p) => p.bounces === 1);
-        if (landing && endOfZ(landing.pos.z) === o.myEnd && !isInBounds(landing.pos.x * (1 - OUT_MARGIN / HALF_WIDTH), landing.pos.z * (1 - OUT_MARGIN / HALF_LENGTH))) {
-          leave = true;
+        if (landing && endOfZ(landing.pos.z) === o.myEnd) {
+          // The read's error shrinks as the ball arrives (see `predict`).
+          const margin = OUT_MARGIN + difficulty.predictionError * Math.min(1, landing.tick * TICK);
+          if (Math.abs(landing.pos.x) > HALF_WIDTH + margin || Math.abs(landing.pos.z) > HALF_LENGTH + margin) {
+            leave = true;
+            settleSpot = readySpot(o);
+          }
         }
       }
       shown.leave = leave;
-      if (leave) return moveTo(o, readySpot(o), null);
+      if (leave) return moveTo(o, settleSpot!, null);
 
       const plan = planContact(o, path);
       if (!plan) return moveTo(o, readySpot(o), null);
@@ -378,14 +396,14 @@ export function createBot(
     return { x, z: -f * depth };
   }
 
-  function moveTo(o: Observation, spot: { x: number; z: number }, shot: ShotType | null): Intent {
+  function moveTo(o: Observation, spot: { x: number; z: number }, shot: ShotType | null, maxSpeed = difficulty.moveSpeed): Intent {
     lastSpot = spot;
     shown.spot = spot;
     if (!o.committed && !shot) shown.shot = null;
     const l = worldToLocal(o.myEnd, spot.x - o.myPos.x, spot.z - o.myPos.z);
     const d = Math.hypot(l.x, l.y);
     // Brake in time to stop on the spot (v² = 2ad, with some margin), so the Bot doesn't overshoot.
-    const speed = Math.min(difficulty.moveSpeed, Math.sqrt(2 * t.playerAccel * 0.7 * d) / t.playerSpeed);
+    const speed = Math.min(maxSpeed, Math.sqrt(2 * t.playerAccel * 0.7 * d) / t.playerSpeed);
     const move = d < 0.03 ? { x: 0, y: 0 } : { x: (l.x / d) * speed, y: (l.y / d) * speed };
     return { move, aim, shot };
   }
