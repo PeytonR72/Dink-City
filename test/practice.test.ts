@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
-import { DIFFICULTY, createBot } from '../src/bot/bot';
+import { DIFFICULTY, createBot, type Personality } from '../src/bot/bot';
 import { observe } from '../src/bot/observe';
 import { PRACTICE_STEPS, Practice, createMachine } from '../src/practice/practice';
-import { createInitialState, step, type SimEvent, type SimState } from '../src/sim';
+import { KITCHEN_DEPTH, createInitialState, simulateFlight, step, type Ball, type SimEvent, type SimState } from '../src/sim';
+import { netClearance } from '../src/sim/solver';
 import { simTuning as t } from '../src/tuning';
 
 vi.setConfig({ testTimeout: 30_000 });
@@ -84,10 +85,12 @@ describe('Practice steps', () => {
 
   it('want a Dink after the bounce in the dink step', () => {
     const p = at(3);
-    expect(p.onEvents([serve(1), hit(0), hit(1, { type: 'soft', variant: 'drop' }), hit(0, { type: 'soft', variant: 'dink' }), dead(1)])).toMatchObject({ kind: 'good' });
-    expect(p.onEvents([serve(1), hit(0), hit(1), hit(0, { variant: 'drive' }), dead(1)])).toMatchObject({ kind: 'miss', detail: expect.stringMatching(/Soft/) });
+    expect(p.step.server).toBe(0);
+    const rally = [serve(0), hit(1), hit(0)];
+    expect(p.onEvents([...rally, hit(1, { type: 'soft', variant: 'dink' }), hit(0, { type: 'soft', variant: 'dink' }), dead(1)])).toMatchObject({ kind: 'good' });
+    expect(p.onEvents([...rally, hit(1), hit(0, { variant: 'drive' }), dead(1)])).toMatchObject({ kind: 'miss', detail: expect.stringMatching(/Soft/) });
     // A dink volleyed from outside the Kitchen is legal, but not the skill: let it bounce.
-    expect(p.onEvents([serve(1), hit(0), hit(1), hit(0, { type: 'soft', variant: 'dink', volley: true }), dead(1)])).toMatchObject({
+    expect(p.onEvents([...rally, hit(1), hit(0, { type: 'soft', variant: 'dink', volley: true }), dead(1)])).toMatchObject({
       kind: 'miss',
       detail: expect.stringMatching(/bounce/),
     });
@@ -109,22 +112,27 @@ describe('Practice steps', () => {
 
 describe('The ball machine', () => {
   /** One rep of `stepIndex`: the machine against a Bot standing in for the Player. */
-  function rep(stepIndex: number, seed = 3) {
+  function rep(stepIndex: number, seed = 3, personality?: Personality) {
     const practice = at(stepIndex);
     const machine = createMachine(seed, t, () => practice.step);
-    const player = createBot(0, seed + 1, DIFFICULTY.hard, t);
+    const player = createBot(0, seed + 1, DIFFICULTY.hard, t, personality);
     let s: SimState = createInitialState(seed, undefined, practice.step.server);
     const events: SimEvent[] = [];
     /** The machine's feet each Tick, and the Tick of its last hit. */
     const machineAt: { x: number; z: number }[] = [];
     let lastFeed = -1;
+    /** The ball as it leaves each of the machine's hits. */
+    const feeds: Ball[] = [];
     while (!events.some((e) => e.kind === 'dead') && s.tick < 60 * 40) {
       s = step(s, [player.think(observe(s, 0)), machine.think(observe(s, 1))], t);
       events.push(...s.events);
       machineAt.push({ ...s.sides[1].players[0].pos });
-      if (s.events.some((e) => e.kind === 'hit' && e.side === 1)) lastFeed = machineAt.length - 1;
+      if (s.events.some((e) => e.kind === 'hit' && e.side === 1)) {
+        lastFeed = machineAt.length - 1;
+        feeds.push(structuredClone(s.ball));
+      }
     }
-    return { events, hits: events.filter((e): e is Hit => e.kind === 'hit'), machineAt, lastFeed };
+    return { events, hits: events.filter((e): e is Hit => e.kind === 'hit'), machineAt, lastFeed, feeds };
   }
 
   /** How far the machine's feet travel over `from`…the end of the rep. */
@@ -167,7 +175,48 @@ describe('The ball machine', () => {
 
   it('feeds a Drive to volley, and a Soft shot to dink', () => {
     expect(rep(2).hits[2]).toMatchObject({ side: 1, type: 'drive' });
-    expect(rep(3).hits[2]).toMatchObject({ side: 1, type: 'soft' });
+    expect(rep(3).hits[3]).toMatchObject({ side: 1, type: 'soft' });
+  });
+
+  describe('in the dink step', () => {
+    const dinkStep = PRACTICE_STEPS.findIndex((s) => s.id === 'dink');
+    const seeds = Array.from({ length: 60 }, (_, i) => i + 1);
+    /** Follows the prompt: drops the third shot (and dinks). */
+    const dropper: Personality = { weights: { soft: 1, drive: 0, lob: 0 }, adjust: {} };
+    /** Drives the third shot instead. A lob would send the machine back, where it can't dink. */
+    const driver: Personality = { weights: { soft: 0, drive: 1, lob: 0 }, adjust: {} };
+
+    /** Where the machine's feed would land if the Player let it, or null if the rep ended before it. */
+    function feedLanding(seed: number, player: Personality) {
+      const { hits, feeds } = rep(dinkStep, seed, player);
+      const feed = hits[PRACTICE_STEPS[dinkStep].target - 2];
+      if (!feed || feed.side !== 1) return null;
+      expect(feed, `seed ${seed}`).toMatchObject({ type: 'soft' });
+      const ball = feeds[feeds.length - 1];
+      const flight = simulateFlight(ball.pos, ball.vel, ball.spin, t);
+      const inKitchen =
+        netClearance(flight) > 0 && Math.sign(flight.landing.z) === -Math.sign(ball.pos.z) && Math.abs(flight.landing.z) < KITCHEN_DEPTH;
+      return { inKitchen, at: `seed ${seed}: ${feed.variant} from ${JSON.stringify(feed.pos)} to ${JSON.stringify(flight.landing)}` };
+    }
+
+    it('dinks a dropped third shot into the Kitchen, every time', () => {
+      const landings = seeds.map((seed) => feedLanding(seed, dropper)).filter((l) => l !== null);
+      expect(landings.length).toBeGreaterThan(seeds.length / 2);
+      for (const { inKitchen, at } of landings) expect(inKitchen, at).toBe(true);
+    });
+
+    it('blocks a driven third shot into the Kitchen, nearly every time', () => {
+      const landings = seeds.map((seed) => feedLanding(seed, driver)).filter((l) => l !== null);
+      expect(landings.length).toBeGreaterThan(seeds.length / 2);
+      expect(landings.filter((l) => l.inKitchen).length / landings.length).toBeGreaterThanOrEqual(0.95);
+    });
+
+    it('can be passed by a Player who follows the prompt', () => {
+      const practice = at(dinkStep);
+      let passed = false;
+      for (let seed = 1; seed <= 30 && !passed; seed++) passed = !!practice.onEvents(rep(dinkStep, seed, dropper).events)?.passed;
+      expect(passed).toBe(true);
+    });
   });
 
   it('keeps rallying in free play', () => {

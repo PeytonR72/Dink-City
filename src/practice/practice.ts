@@ -56,10 +56,14 @@ export const PRACTICE_STEPS: PracticeStep[] = [
   {
     id: 'dink',
     title: 'Dink',
-    prompt: 'Return and move up. The machine drops the next ball into the Kitchen: let it bounce, step in if you must, and dink it back with Soft (J).',
-    server: 1,
-    feeds: { 1: 'soft', 3: 'soft' },
-    target: 4,
+    prompt:
+      'You serve. Drop your third shot with Soft (J) and move up: the machine dinks the next ball into the Kitchen. Let it bounce, step in if you must, and dink it back with Soft (J).',
+    // The machine returns, then moves up and dinks from its own Kitchen line. A Soft from its baseline would
+    // fly deep (a Soft from behind the Kitchen is easy to overhit), and the return must bounce, so the dink
+    // can't come sooner. A dropped third shot comes in slow enough for a Dink; a driven one gets a Block.
+    server: 0,
+    feeds: { 2: 'drive', 4: 'soft' },
+    target: 5,
     check: (shot) =>
       shot.volley ? 'Let it bounce first, then dink it.' : shot.variant === 'dink' ? null : 'Use Soft (J) from the Kitchen line for a dink.',
   },
@@ -151,6 +155,16 @@ const MACHINE: Difficulty = {
 };
 
 /**
+ * Aim depth (-1..1) of a Soft feed from the Kitchen line, down the middle. The contact assist's footwork
+ * spreads it about half a meter either way: a Dink still lands in the Kitchen, and a Block (the Soft against a
+ * fast ball, which flies flatter) goes deeper so it clears the net.
+ */
+function softFeedDepth(o: Observation, t: SimTuning): number {
+  const { vel } = o.ball;
+  return Math.hypot(vel.x, vel.y, vel.z) >= t.blockSpeed ? 1 : 0.3;
+}
+
+/**
  * The ball machine: a Bot whose shot presses follow the current step's feeds, aimed down the middle. It only
  * moves while it still has a feed to hit this rep, so it never chases a ball it will let go.
  */
@@ -165,10 +179,10 @@ export function createMachine(seed: number, t: SimTuning, step: () => PracticeSt
       if (!feeds) return intent;
       const feedsLeft = Object.keys(feeds).some((n) => Number(n) > o.shots);
       if (!feedsLeft) return { move: { x: 0, y: 0 }, aim: intent.aim, shot: null };
-      if (!intent.shot) return intent;
-      const shot = feeds[o.shots + 1] ?? null;
-      // A Soft feed goes short (a drop into the Kitchen); everything else to the middle.
-      return { ...intent, shot, aim: { x: 0, y: shot === 'soft' && o.shots > 0 ? -0.4 : 0 } };
+      const feed = feeds[o.shots + 1] ?? null;
+      // Held every Tick, not just on the press: the Sim reads Aim at Contact.
+      const aim = { x: 0, y: feed === 'soft' && o.shots > 0 ? softFeedDepth(o, t) : 0 };
+      return { ...intent, shot: intent.shot && feed, aim };
     },
   };
 }
