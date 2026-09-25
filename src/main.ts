@@ -47,8 +47,8 @@ const hud = new Hud(document.querySelector('#hud')!, LOCAL);
 unlockAudio();
 
 const flagVenue = params.get('venue') as VenueId | null;
-/** The Venue on show: the flag's, or the furthest one open. */
-let venue: VenueId = flagVenue && VENUE_IDS.includes(flagVenue) ? flagVenue : VENUE_IDS.filter((id) => isUnlocked(progress, id)).at(-1)!;
+/** The Venue on show: the flag's, or the Park, which the menu shows behind the map until a Venue is played. */
+let venue: VenueId = flagVenue && VENUE_IDS.includes(flagVenue) ? flagVenue : 'park';
 await showVenue(venue).catch(failed);
 
 /** Puts `id`'s surroundings, lighting, ambience and Bot look on show. */
@@ -111,8 +111,9 @@ pause.on('#quit', () => setMode('menu'));
 let bot: Bot;
 /** Practice mode's steps and reps, or null in a Match. */
 let practice: Practice | null = null;
-let prev: SimState;
-let curr: SimState;
+/** Set by newMatch() before the first frame. */
+let prev!: SimState;
+let curr!: SimState;
 /** The Difficulty of the Match in play, for its star. */
 let difficulty = settings().difficulty;
 /** The current Rally's start state and every Tick's Intents since: enough to replay it. */
@@ -204,6 +205,8 @@ function setMode(m: Mode) {
 newMatch(Date.now());
 if (params.has('practice')) startPractice();
 else setMode(params.has('play') ? 'match' : 'menu');
+// The menu doesn't draw the court, so draw it once: the Park stands behind the map until a Venue is played.
+if (mode === 'menu') renderer.render(prev, curr, 1, 0);
 
 if (import.meta.env.DEV && params.has('debug')) {
   import('./debug/panel').then(({ createDebugPanel }) => createDebugPanel(simTuning, viewTuning, DIFFICULTY[settings().difficulty]));
@@ -223,6 +226,9 @@ if (import.meta.env.DEV && params.has('debug')) {
   },
   get mode() {
     return mode;
+  },
+  get venue() {
+    return venue;
   },
   simTuning,
   viewTuning,

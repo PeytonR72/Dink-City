@@ -217,7 +217,8 @@ def rooftop_block():
     rooftop.water_tank(deck, x + 7.4, z - 9.5, 0.8)
     rooftop.planter(deck, x - 7.4, z + 11.5, 1.6)
     top = ROOF_TOP + 0.3
-    return [b.build("rooftop"), place(deck.build("deck"), 0, top, 0), *mini_court(x, z, top)]
+    # The court sits a little above the deck, as the Park's sits above its grass, so its apron never z-fights the deck.
+    return [b.build("rooftop"), place(deck.build("deck"), 0, top, 0), *mini_court(x, z, top + 0.03)]
 
 
 def park_zone(sway):

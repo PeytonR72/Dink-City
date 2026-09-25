@@ -6,6 +6,7 @@ interface Dink {
   advance(ticks: number, drive?: unknown): unknown;
   newMatch(seed: number): void;
   eventLog: { kind: string; reason?: string; loser?: number }[];
+  venue: string;
 }
 
 const VENUES = ['park', 'rooftop', 'beach'] as const;
@@ -99,6 +100,18 @@ test('the map opens first, with only the Park open, and the Park starts a Match'
   await page.getByRole('button', { name: /The Park/ }).click();
   await expect(page.locator('#menu')).toBeHidden();
   await expect(page.locator('#scoreboard')).toBeVisible();
+});
+
+test('the Park shows behind the map on first load, even with later Venues open', async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem('dink.progress', JSON.stringify({ park: ['easy'], rooftop: ['easy'], beach: [] })));
+  await openMap(page);
+  const shown = await page.evaluate(() => {
+    const dink = (window as unknown as { dink: Dink }).dink;
+    return { venue: dink.venue, calls: dink.stats.calls };
+  });
+  expect(shown.venue).toBe('park');
+  // The court has been drawn behind the menu, not left as the page's plain sky blue.
+  expect(shown.calls).toBeGreaterThan(0);
 });
 
 test("a new Match doesn't replay the last Match's call-out", async ({ page }) => {
