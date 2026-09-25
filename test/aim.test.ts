@@ -9,9 +9,12 @@ import {
   type Intent,
   type ShotType,
   type SimState,
+  type SimTuning,
   type Vec2,
 } from '../src/sim';
-import { simTuning as t } from '../src/tuning';
+import { simTuning as defaultTuning } from '../src/tuning';
+
+const t = defaultTuning;
 
 const idle: Intent = { move: { x: 0, y: 0 }, aim: { x: 0, y: 0 }, shot: null };
 
@@ -25,10 +28,16 @@ interface Contact {
   running?: number;
   /** Ball offset from the sweet spot, as a fraction of the reach to the Player's right. */
   offCenter?: number;
+  /** The shot the opponent hit to send this ball over (a Drive by default). */
+  incoming?: 'drive' | 'smash';
+  /** Committed late in the ball's flight, so the timing is rushed. */
+  rushed?: boolean;
+  tuning?: SimTuning;
 }
 
 /** Side 0 hits a ball sitting at (or near) its sweet spot; returns where the shot first lands, in Side 1's frame. */
 function landing(c: Contact): { x: number; depth: number } {
+  const t = c.tuning ?? defaultTuning;
   let s: SimState = structuredClone(createInitialState(c.seed));
   s.phase = 'rally';
   s.shots = 4;
@@ -37,8 +46,9 @@ function landing(c: Contact): { x: number; depth: number } {
   const sweet = localToWorld(endOf(s, 0), t.sweetSpotSide + (c.offCenter ?? 0) * t.reachSide, t.sweetSpotForward);
   s.sides[0].players[0].pos = player;
   s.sides[0].players[0].vel = { x: c.running ?? 0, y: 0, z: 0 };
-  // Committed early in the ball's flight, so timing is perfect.
-  s.sides[0].players[0].commit = { type: c.type, tick: 50, bestDistance: null };
+  // Committed early in the ball's flight, so timing is perfect, unless rushed.
+  s.sides[0].players[0].commit = { type: c.type, tick: c.rushed ? 95 : 50, bestDistance: null };
+  s.sides[1].players[0].swing = { type: 'drive', variant: c.incoming ?? 'drive', tick: 40 };
   s.ball = { pos: { x: player.x + sweet.x, y: 0.7, z: player.z + sweet.z }, vel: { x: 0, y: 0, z: 0 }, spin: 0, lastHitBy: 1, bouncesSinceHit: 1, hitTick: 40 };
   s = step(s, [{ ...idle, aim: c.aim ?? { x: 0, y: 0 } }, idle], t);
   expect(s.events.some((e) => e.kind === 'hit')).toBe(true);
@@ -97,5 +107,41 @@ describe('Soft shots from deep', () => {
   it('forgives the same off-center Soft from the Kitchen line', () => {
     const p = landing({ seed: 1, type: 'soft', depth: KITCHEN_DEPTH + 0.3, offCenter: 0.3 });
     expect(p.depth).toBeLessThan(dinkDepth + 0.3);
+  });
+});
+
+describe('Lob error', () => {
+  const mean = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / xs.length;
+  /** Mean sideways miss of a Lob hit on the run, so it has some Aim error to scale. */
+  const sideways = (c: Omit<Contact, 'seed' | 'type' | 'depth'>) =>
+    mean(seeds.map((seed) => Math.abs(landing({ seed, type: 'lob', depth: 5, running: t.playerSpeed, ...c }).x)));
+
+  it('flies a Lob off a Smash deeper', () => {
+    const plain = landing({ seed: 1, type: 'lob', depth: 5 }).depth;
+    const offSmash = landing({ seed: 1, type: 'lob', depth: 5, incoming: 'smash' }).depth;
+    expect(offSmash / plain).toBeCloseTo(t.lobOffSmashDepth, 1);
+    expect(offSmash).toBeGreaterThan(plain + 0.5);
+  });
+
+  it('sprays a Lob off a Smash more than the same Lob off a Drive', () => {
+    expect(sideways({ incoming: 'smash' }) / sideways({})).toBeCloseTo(t.lobOffSmashError, 1);
+  });
+
+  it('sprays a rushed Lob more than it otherwise would', () => {
+    const noExtra = { ...t, lobRushedError: 1 };
+    const ratio = sideways({ rushed: true }) / sideways({ rushed: true, tuning: noExtra });
+    expect(ratio).toBeCloseTo(t.lobRushedError, 2);
+  });
+
+  it("doesn't stack the two: a rushed Lob off a Smash sprays as one off a Smash", () => {
+    const noRushExtra = { ...t, lobRushedError: 1 };
+    expect(sideways({ incoming: 'smash', rushed: true })).toBeCloseTo(sideways({ incoming: 'smash', rushed: true, tuning: noRushExtra }), 6);
+  });
+
+  it('leaves other shots off a Smash alone', () => {
+    for (const seed of seeds.slice(0, 5)) {
+      const c = { seed, type: 'drive' as const, depth: 5, running: t.playerSpeed };
+      expect(landing({ ...c, incoming: 'smash' })).toEqual(landing(c));
+    }
   });
 });

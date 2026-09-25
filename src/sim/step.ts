@@ -248,14 +248,15 @@ function hit(s: SimState, i: SideIndex, commit: Commit, distance: number, aim: V
   const weak = 1 - quality;
   const end = endOf(s, i);
   const lateral = localToWorld(end, clamp(aim.x, -1, 1) * tuning.width, 0).x;
-  let depth = Math.max(0.5, depthFor(tuning, aim.y) - weak * tuning.weakDepth);
+  const lob = lobError(s, type, factors, t);
+  let depth = Math.max(0.5, depthFor(tuning, aim.y) - weak * tuning.weakDepth) * lob.depth;
   const target = { x: clamp(lateral, -HALF_WIDTH + 0.15, HALF_WIDTH - 0.15), z: 0 };
 
   // A random miss from moving at Contact, plus a smaller one from poor quality
   // (squared, so only a poor shot sprays). Applied after the in-court clamp, so
   // a shot on the run aimed near a line can go out.
   const running = Math.min(1, player.speed / t.playerSpeed);
-  const spread = t.moveAimError * running + t.qualityAimError * weak * weak;
+  const spread = (t.moveAimError * running + t.qualityAimError * weak * weak) * lob.spread;
   target.x += (random() + random() - 1) * spread;
   depth += (random() + random() - 1) * spread;
 
@@ -283,6 +284,17 @@ function hit(s: SimState, i: SideIndex, commit: Commit, distance: number, aim: V
     vel = solveShot(ball.pos, target, apex, tuning.spin, t);
   }
   launch(s, i, type, variant, vel, tuning.spin, { volley: ball.bouncesSinceHit === 0, quality, factors });
+}
+
+/**
+ * A Lob off a Smash is hard to control: it flies deeper and sprays more. A rushed Lob sprays a little more.
+ * The two don't stack; off a Smash wins.
+ */
+function lobError(s: SimState, type: ShotType, factors: QualityFactors, t: SimTuning): { depth: number; spread: number } {
+  if (type !== 'lob') return { depth: 1, spread: 1 };
+  const from = s.ball.lastHitBy;
+  if (from !== null && s.sides[from].players[0].swing?.variant === 'smash') return { depth: t.lobOffSmashDepth, spread: t.lobOffSmashError };
+  return { depth: 1, spread: factors.timing < 1 ? t.lobRushedError : 1 };
 }
 
 const SERVE_INFO = { volley: false, quality: 1, factors: { set: 1, timing: 1, height: 1, pace: 1 } };

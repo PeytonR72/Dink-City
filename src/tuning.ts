@@ -28,6 +28,9 @@ export const simTuning: SimTuning = {
   softOverhit: 1.0,
   softPerfectRadius: 0.1,
   qualityAimError: 0.8,
+  lobOffSmashDepth: 1.15,
+  lobOffSmashError: 1.1,
+  lobRushedError: 1.05,
 
   commitFullFraction: 0.5,
   commitRushedFraction: 0.85,

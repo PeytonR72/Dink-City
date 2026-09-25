@@ -216,6 +216,11 @@ export interface SimTuning {
 
   /** Extra random miss, in meters, at Shot quality 0. Scales with (1 − quality)², so only poor shots spray. */
   qualityAimError: number;
+  /** A Lob off the opponent's Smash aims this many times as deep, and its Aim error is this many times as wide. */
+  lobOffSmashDepth: number;
+  lobOffSmashError: number;
+  /** A Lob from a rushed Commit (not off a Smash): its Aim error is this many times as wide. */
+  lobRushedError: number;
 
   /**
    * Commit timing, as a fraction of the incoming ball's flight: pressed by

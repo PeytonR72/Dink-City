@@ -80,6 +80,9 @@ export function createDebugPanel(sim: SimTuning, view: ViewTuning, bot: Difficul
   q.addBinding(sim, 'paceFull', { min: 0, max: 30, step: 0.5 });
   q.addBinding(sim, 'paceQuality', { min: 0, max: 1, step: 0.05 });
   q.addBinding(sim, 'qualityAimError', { min: 0, max: 3, step: 0.05 });
+  q.addBinding(sim, 'lobOffSmashDepth', { min: 1, max: 1.5, step: 0.01 });
+  q.addBinding(sim, 'lobOffSmashError', { min: 1, max: 2, step: 0.01 });
+  q.addBinding(sim, 'lobRushedError', { min: 1, max: 2, step: 0.01 });
   q.addBinding(sim, 'dinkZone', { min: 0, max: 4.6, step: 0.1 });
   q.addBinding(sim, 'blockSpeed', { min: 5, max: 25, step: 0.5 });
 

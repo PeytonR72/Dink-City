@@ -107,7 +107,7 @@ function leaves(seeds: number[], difficulty: Difficulty) {
 }
 
 const game = botGame(2026);
-const GOLDEN = { points: [11, 6], tick: 30485 };
+const GOLDEN = { points: [11, 13], tick: 39353 };
 const deads = game.events.filter((e) => e.kind === 'dead');
 
 describe('Bot-vs-Bot Game', () => {
