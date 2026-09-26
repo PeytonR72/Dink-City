@@ -1,7 +1,7 @@
 // Practice mode: a ball machine on Side 1 feeds shots while step-by-step prompts teach the Two-bounce rule and
 // Kitchen faults. The machine is a precise Bot whose Intents are edited, so it only ever feeds through the
 // Intent interface (ADR-0003). There is no score: each rep is a fresh Rally, judged from its events.
-import { createBot, type Difficulty } from '../bot/bot';
+import { DIFFICULTY, createBot, type Difficulty, type Personality } from '../bot/bot';
 import type { Observation } from '../bot/observe';
 import { faultText, type FaultText } from '../hud/faultText';
 import type { Intent, ShotType, SideIndex, SimEvent, SimTuning } from '../sim';
@@ -155,6 +155,15 @@ const MACHINE: Difficulty = {
 };
 
 /**
+ * The free-play partner: the easy Bot, playing only Soft shots near the middle, never going for the lines and
+ * never faulting in the Kitchen. Practice, not a match: it keeps the ball in play for the Player.
+ */
+const FREE_PLAY: Personality = {
+  weights: { soft: 1, drive: 0, lob: 0 },
+  adjust: { aimWidth: -0.3, unforcedError: -1, kitchenDiscipline: 1 },
+};
+
+/**
  * Aim depth (-1..1) of a Soft feed from the Kitchen line, down the middle. The contact assist's footwork
  * spreads it about half a meter either way: a Dink still lands in the Kitchen, and a Block (the Soft against a
  * fast ball, which flies flatter) goes deeper so it clears the net.
@@ -170,13 +179,19 @@ function softFeedDepth(o: Observation, t: SimTuning): number {
  */
 export function createMachine(seed: number, t: SimTuning, step: () => PracticeStep) {
   const bot = createBot(1, seed, MACHINE, t);
-  return {
+  const partner = createBot(1, seed + 1, DIFFICULTY.easy, t, FREE_PLAY);
+  const machine = {
     plan: bot.plan,
     think(o: Observation): Intent {
-      // Always think, so the Bot's per-ball state stays current for free play.
-      const intent = bot.think(o);
       const { feeds } = step();
-      if (!feeds) return intent;
+      if (!feeds) {
+        machine.plan = partner.plan;
+        // Its Serve ignores the weights, so hold it to Soft here too.
+        const intent = partner.think(o);
+        return { ...intent, shot: intent.shot && 'soft' };
+      }
+      machine.plan = bot.plan;
+      const intent = bot.think(o);
       const feedsLeft = Object.keys(feeds).some((n) => Number(n) > o.shots);
       if (!feedsLeft) return { move: { x: 0, y: 0 }, aim: intent.aim, shot: null };
       const feed = feeds[o.shots + 1] ?? null;
@@ -185,4 +200,5 @@ export function createMachine(seed: number, t: SimTuning, step: () => PracticeSt
       return { ...intent, shot: intent.shot && feed, aim };
     },
   };
+  return machine;
 }

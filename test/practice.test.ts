@@ -223,4 +223,11 @@ describe('The ball machine', () => {
     const { hits } = rep(4, 5);
     expect(hits.filter((h) => h.side === 1).length).toBeGreaterThanOrEqual(1);
   });
+
+  it('only plays Soft shots in free play', () => {
+    for (const seed of [3, 4, 5, 6, 7]) {
+      const { hits } = rep(4, seed);
+      for (const h of hits.filter((h) => h.side === 1)) expect(h.type, `seed ${seed}`).toBe('soft');
+    }
+  });
 });
