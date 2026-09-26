@@ -51,9 +51,9 @@ LAWN_Z = AVENUE_Z + ROAD[0]
 # The boardwalk between the city and the sand.
 BOARDWALK_X = (CITY_X[1], CITY_X[1] + 2.0)
 GROUND = 0.07
-# The sea's surface: high enough that its swell (up to 0.08 either way, see src/menu/mapView.ts) never shows the
-# board under it.
-SEA_Y = 0.12
+# The sea's surface: high enough that its swell (up to 0.08 either way, see src/menu/mapView.ts) never dips under
+# the sand it runs up onto (at GROUND).
+SEA_Y = 0.17
 
 
 def shore(z):
@@ -159,8 +159,9 @@ def board():
     b.box((BOARD_X * 2 - 0.2, 0.04, DEPTH_Z - 0.2), (0, -0.01, MID_Z), "pavement", 0)
     park_w = CITY_X[0] + BOARD_X
     b.box((park_w, 0.06, DEPTH_Z - 0.2), (-BOARD_X + park_w / 2, 0.01, MID_Z), "grass", 0)
+    # The lawn runs back under the avenue, so the corners in front of its turning circles are grass too.
     lawn_w = BOARDWALK_X[0] - CITY_X[0]
-    b.box((lawn_w, 0.06, FRONT - LAWN_Z - 0.1), (CITY_X[0] + lawn_w / 2, 0.01, (LAWN_Z + FRONT) / 2), "grass", 0)
+    b.box((lawn_w, 0.06, FRONT - AVENUE_Z - 0.1), (CITY_X[0] + lawn_w / 2, 0.01, (AVENUE_Z + FRONT) / 2), "grass", 0)
     # The hedge, in clipped lengths, from the back of the board to the avenue's turning circle.
     z = BACK + 0.6
     while z < AVENUE_Z - TURN[0] - 1.5:
