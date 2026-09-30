@@ -1,15 +1,16 @@
 // A scripted client for a Court under `wrangler dev`. Start `npm run party`, then `npm --prefix party run smoke`
-// for the handshake checks, or `npm --prefix party run smoke -- --match` to have two Bots play a whole Match.
-// Pass another base URL as an argument to aim it elsewhere.
+// for the handshake checks, `-- --match` to have two Bots play a whole Match, `-- --lobby` for the Lobby's list, or
+// `-- --expire` to see an entry expire (under a shortened TTL; see the README). Pass another base URL as an argument
+// to aim it elsewhere.
 import { DIFFICULTY, createBot, type Bot } from '../../src/bot/bot';
 import { observe } from '../../src/bot/observe';
-import { PROTOCOL_VERSION, decode, encode, quantizeIntent, simHash, type CourtMsg, type HelloMsg } from '../../src/net';
+import { PROTOCOL_VERSION, decode, encode, quantizeIntent, simHash, type CourtMsg, type HelloMsg, type LobbyCourt, type LobbyMsg } from '../../src/net';
 import type { Intent, SideIndex, SimState } from '../../src/sim';
 import { simTuning } from '../../src/tuning';
 
 const args = process.argv.slice(2);
 const BASE = args.find((a) => !a.startsWith('--')) ?? 'http://localhost:8787';
-const MATCH = args.includes('--match');
+const MODE = args.find((a) => ['--match', '--lobby', '--expire'].includes(a)) ?? '--handshake';
 const ORIGIN = 'http://localhost:5173';
 const TIMEOUT_MS = 5_000;
 /** A Quick Match between easy Bots takes a few minutes of real time: Game speed online is always 1. */
@@ -24,11 +25,15 @@ interface Client {
   onMessage?: (msg: CourtMsg) => void;
 }
 
+/** A socket to a Durable Object, with the Origin a browser would send. */
+function open(party: 'court' | 'lobby', name: string): WebSocket {
+  // Node's WebSocket (undici) takes headers; browsers send Origin themselves.
+  return new WebSocket(`${BASE.replace(/^http/, 'ws')}/parties/${party}/${name}`, { headers: { Origin: ORIGIN } } as unknown as string[]);
+}
+
 /** Connects to a Court, says hello, and waits for the first answer. */
 function connect(code: string, hello: Partial<HelloMsg> = {}): Promise<Client> {
-  const url = `${BASE.replace(/^http/, 'ws')}/parties/court/${code}`;
-  // Node's WebSocket (undici) takes headers; browsers send Origin themselves.
-  const ws = new WebSocket(url, { headers: { Origin: ORIGIN } } as unknown as string[]);
+  const ws = open('court', code);
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(`no answer from ${code}`)), TIMEOUT_MS);
     ws.addEventListener('open', () =>
@@ -46,7 +51,7 @@ function connect(code: string, hello: Partial<HelloMsg> = {}): Promise<Client> {
   });
 }
 
-function close(c: Client): Promise<void> {
+function close(c: { ws: WebSocket }): Promise<void> {
   return new Promise((resolve) => {
     if (c.ws.readyState === WebSocket.CLOSED) return resolve();
     c.ws.addEventListener('close', () => resolve());
@@ -190,7 +195,138 @@ async function match(): Promise<void> {
   }
 }
 
-(MATCH ? match() : handshake()).catch((e) => {
+interface Subscriber {
+  ws: WebSocket;
+  courts: LobbyCourt[];
+  /** Waits for the list to satisfy `ok`, and resolves with how long that took, or null after `ms`. */
+  until(ok: (courts: LobbyCourt[]) => boolean, ms: number): Promise<number | null>;
+}
+
+/** Subscribes to the Lobby, like the menu's Online panel, and waits for the first list. */
+function subscribe(): Promise<Subscriber> {
+  const ws = open('lobby', 'global');
+  const waiters = new Set<() => void>();
+  const sub: Subscriber = {
+    ws,
+    courts: [],
+    until(ok, ms) {
+      const began = Date.now();
+      return new Promise((resolve) => {
+        const check = () => {
+          if (!ok(sub.courts)) return;
+          waiters.delete(check);
+          clearTimeout(timer);
+          resolve(Date.now() - began);
+        };
+        const timer = setTimeout(() => {
+          waiters.delete(check);
+          resolve(null);
+        }, ms);
+        waiters.add(check);
+        check();
+      });
+    },
+  };
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('no list from the Lobby')), TIMEOUT_MS);
+    ws.addEventListener('message', (e) => {
+      const msg = decode(String(e.data)) as LobbyMsg;
+      if (msg.t !== 'courts') return;
+      sub.courts = msg.courts;
+      clearTimeout(timer);
+      resolve(sub);
+      for (const w of [...waiters]) w();
+    });
+    ws.addEventListener('error', () => reject(new Error('socket error on the Lobby')));
+  });
+}
+
+const listed = (code: string) => (courts: LobbyCourt[]) => courts.some((c) => c.code === code);
+const unlisted = (code: string) => (courts: LobbyCourt[]) => !courts.some((c) => c.code === code);
+const took = (ms: number | null) => (ms === null ? 'never' : `${ms} ms`);
+
+/** Waits for the next message on a Court client, or null after `ms`. */
+function next(c: Client, ms: number): Promise<CourtMsg | null> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(null), ms);
+    c.onMessage = (msg) => {
+      clearTimeout(timer);
+      c.onMessage = undefined;
+      resolve(msg);
+    };
+  });
+}
+
+async function lobby(): Promise<void> {
+  const sub = await subscribe();
+  check('the Lobby sends the list on connect', Array.isArray(sub.courts));
+
+  const began = Date.now();
+  const { code, hostToken } = await create('quick');
+  const shown = (await sub.until(listed(code), 1_000)) === null ? null : Date.now() - began;
+  check(`a new Court is listed within 1 s of the create request (${took(shown)})`, shown !== null && shown <= 1_000);
+  const entry = sub.courts.find((c) => c.code === code);
+  check('the entry names the host and the Preset, with one Player', entry?.hostName === 'Smoke Host' && entry.preset === 'quick' && entry.players === 1, entry);
+
+  const host = await connect(code, { name: 'Smoke Host', token: hostToken });
+  const guest = await connect(code, { name: 'Smoke Guest' });
+  const hidden = await sub.until(unlisted(code), 1_000);
+  check(`it leaves the list when a Guest joins (${took(hidden)})`, hidden !== null);
+
+  console.log("     the Guest leaves; their seat is freed after the 30 s grace");
+  await close(guest);
+  const back = await sub.until(listed(code), 35_000);
+  check(`it comes back once the Guest's seat is freed (${took(back)} after they left)`, back !== null);
+
+  const second = await connect(code, { name: 'Second Guest' });
+  const hiddenAgain = await sub.until(unlisted(code), 1_000);
+  check(`it leaves the list again for the next Guest (${took(hiddenAgain)})`, hiddenAgain !== null);
+  const started = Promise.all([next(host, TIMEOUT_MS), next(second, TIMEOUT_MS)]);
+  for (const c of [host, second]) c.ws.send(encode({ t: 'ready' }));
+  const [a, b] = await started;
+  check('both Players get start', a?.t === 'start' && b?.t === 'start', [a?.t, b?.t]);
+  // The start removes an entry that's already hidden, so from outside it can only be seen as the Court staying off
+  // the list. courtDirectory's tests cover the removal itself.
+  check('it stays off the list once the Match has started', (await sub.until(listed(code), 2_000)) === null);
+  await Promise.all([close(host), close(second)]);
+
+  console.log('     two Hosts leave before the start, one alone and one with a Guest seated (15 s reload grace)');
+  const alone = await create('standard');
+  const pair = await create('long');
+  const aloneHost = await connect(alone.code, { name: 'Smoke Host', token: alone.hostToken });
+  const pairHost = await connect(pair.code, { name: 'Smoke Host', token: pair.hostToken });
+  const pairGuest = await connect(pair.code, { name: 'Smoke Guest' });
+  check('the lone Host is listed and the full Court is not', (await sub.until((cs) => listed(alone.code)(cs) && unlisted(pair.code)(cs), 1_000)) !== null);
+  const told = next(pairGuest, 20_000);
+  const left = Date.now();
+  await Promise.all([close(aloneHost), close(pairHost)]);
+  const gone = await sub.until(unlisted(alone.code), 20_000);
+  check(`the lone Host's Court leaves the list after the grace (${took(gone)})`, gone !== null && gone >= 14_000, gone);
+  const msg = await told;
+  check(`the seated Guest gets host_left (${Date.now() - left} ms after the Host left)`, msg?.t === 'error' && msg.code === 'host_left', msg);
+  const late = await connect(pair.code, { name: 'Late' });
+  check('the closed Court refuses a newcomer', late.first.t === 'error' && late.first.code === 'not_found', late.first);
+  await Promise.all([close(pairGuest), close(late)]);
+  await close(sub);
+}
+
+/**
+ * Needs `LOBBY_TTL_MS` under 15 s (see the README). The Court heartbeats only every 30 s, so between heartbeats its
+ * entry gets no reports, just like one whose Court was killed.
+ */
+async function expire(): Promise<void> {
+  const sub = await subscribe();
+  const { code, hostToken } = await create('quick');
+  const host = await connect(code, { name: 'Smoke Host', token: hostToken });
+  check('the Court is listed', (await sub.until(listed(code), 1_000)) !== null);
+  const gone = await sub.until(unlisted(code), 28_000);
+  check(`its entry expires with no reports (${took(gone)}: the TTL plus up to one 15 s sweep)`, gone !== null, gone);
+  await close(host);
+  await close(sub);
+}
+
+const modes: Record<string, () => Promise<void>> = { '--handshake': handshake, '--match': match, '--lobby': lobby, '--expire': expire };
+modes[MODE]!().catch((e) => {
   console.error(e);
   process.exitCode = 1;
 });

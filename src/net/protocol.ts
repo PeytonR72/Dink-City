@@ -1,14 +1,17 @@
-// The Court's wire messages, both directions. `decode` checks only the tag; the Court re-guards every payload.
+// The Court's and the Lobby's wire messages. `decode` checks only the tag; the Court re-guards every payload.
 import type { SideIndex, SimEvent, SimState } from '../sim';
 import { isQIntent, type QIntent } from './intentCodec';
 import { isPresetId, type PresetId } from './presets';
 
 /** Bump when a message changes shape. The handshake refuses a mismatch with `version`. */
-export const PROTOCOL_VERSION = 2;
+export const PROTOCOL_VERSION = 3;
 
-/** Why the Court refused a client. Every code but `bad_message` closes the socket. */
+/**
+ * Why the Court refused or dropped a client. Every code but `bad_message` closes the socket. `host_left`: the Host
+ * left before the Match started, and the Court closed.
+ */
 export type CourtErrorCode = (typeof COURT_ERROR_CODES)[number];
-const COURT_ERROR_CODES = ['full', 'not_found', 'bad_name', 'version', 'bad_message'] as const;
+const COURT_ERROR_CODES = ['full', 'not_found', 'bad_name', 'version', 'bad_message', 'host_left'] as const;
 
 /**
  * The close code of a socket the Court ends: a refusal (the reason is its `CourtErrorCode`), a seat taken by another
@@ -63,8 +66,20 @@ export type CourtMsg =
   | { t: 'snap'; tick: number; ack: number; state: SimState; events: SnapEvent[] }
   | { t: 'over'; winner: SideIndex };
 
+/** An open Court as the Lobby lists it. Full Courts aren't listed, so `players` is always 1. */
+export interface LobbyCourt {
+  code: string;
+  hostName: string;
+  preset: PresetId;
+  players: 1;
+  createdAt: number;
+}
+
+/** Lobby → menu client: every open Court, newest first, on connect and after every change. */
+export type LobbyMsg = { t: 'courts'; courts: LobbyCourt[] };
+
 /** A message as it goes on the wire. */
-export function encode(msg: ClientMsg | CourtMsg): string {
+export function encode(msg: ClientMsg | CourtMsg | LobbyMsg): string {
   return JSON.stringify(msg);
 }
 
@@ -123,6 +138,19 @@ export function isCourtMsg(v: unknown): v is CourtMsg {
       return isSide(m.winner);
   }
   return false;
+}
+
+/** Guards a message from the Lobby. */
+export function isLobbyMsg(v: unknown): v is LobbyMsg {
+  if (!isTagged(v) || v.t !== 'courts') return false;
+  const courts = (v as { courts?: unknown }).courts;
+  return Array.isArray(courts) && courts.every(isLobbyCourt);
+}
+
+function isLobbyCourt(v: unknown): v is LobbyCourt {
+  if (typeof v !== 'object' || v === null) return false;
+  const c = v as Record<string, unknown>;
+  return typeof c.code === 'string' && typeof c.hostName === 'string' && isPresetId(c.preset) && c.players === 1 && Number.isFinite(c.createdAt);
 }
 
 function isSide(v: unknown): v is SideIndex {

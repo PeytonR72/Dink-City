@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { PROTOCOL_VERSION, decode, encode, isCourtMsg, isHello, isIn, isReady, type CourtMsg } from '../../src/net';
+import { PROTOCOL_VERSION, decode, encode, isCourtMsg, isHello, isIn, isLobbyMsg, isReady, type CourtMsg, type LobbyMsg } from '../../src/net';
 import { createInitialState } from '../../src/sim';
 
 const hello = { t: 'hello', name: 'Pat', protocolVersion: PROTOCOL_VERSION, simHash: '0123abcd' };
@@ -68,6 +68,7 @@ describe('the Court protocol', () => {
     const good: CourtMsg[] = [
       { t: 'welcome', side: 1, token: 'tok', preset: 'quick', players: [{ name: 'A', connected: true }, null] },
       { t: 'error', code: 'full' },
+      { t: 'error', code: 'host_left' },
       { t: 'start', seed: 7, preset: 'long', players: [{ name: 'A', connected: true }, { name: 'B', connected: false }] },
       { t: 'snap', tick: 4, ack: -1, state: createInitialState(1), events: [{ kind: 'match', winner: 1, tick: 3 }] },
       { t: 'over', winner: 0 },
@@ -90,5 +91,27 @@ describe('the Court protocol', () => {
       { t: 'over', winner: -1 },
     ];
     for (const msg of bad) expect(isCourtMsg(msg), JSON.stringify(msg)).toBe(false);
+  });
+
+  it('guards a Lobby list', () => {
+    const court = { code: 'AB2CD', hostName: 'Ana', preset: 'quick', players: 1, createdAt: 5 } as const;
+    const good: LobbyMsg[] = [
+      { t: 'courts', courts: [] },
+      { t: 'courts', courts: [court, { ...court, code: 'XY3ZW' }] },
+    ];
+    for (const msg of good) expect(isLobbyMsg(decode(encode(msg)))).toBe(true);
+
+    const bad: unknown[] = [
+      null,
+      { t: 'courts' },
+      { t: 'courts', courts: {} },
+      { t: 'snap', courts: [] },
+      { t: 'courts', courts: [null] },
+      { t: 'courts', courts: [{ ...court, players: 2 }] },
+      { t: 'courts', courts: [{ ...court, preset: 'blitz' }] },
+      { t: 'courts', courts: [{ ...court, hostName: 3 }] },
+      { t: 'courts', courts: [{ ...court, createdAt: '5' }] },
+    ];
+    for (const msg of bad) expect(isLobbyMsg(msg), JSON.stringify(msg)).toBe(false);
   });
 });

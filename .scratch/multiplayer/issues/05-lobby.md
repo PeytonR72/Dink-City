@@ -61,3 +61,76 @@ Courts report their lifecycle to a singleton `Lobby` DO, which pushes the list o
 The menu UI (06).
 
 ## Comments
+
+### 2026-09-30: implemented
+
+One commit, "Online play: the Lobby lists open Courts live" (the one that adds this comment).
+
+**What was built:**
+- **`party/src/courtDirectory.ts`** (pure): `createCourtDirectory({ ttlMs })` with `report(r, now)`, `sweep(now)` and `list(now)`.
+  - Every report sets `expiresAt = now + 90 s`.
+  - `join` hides an entry and `leave` shows it again. `start`, `end` and `close` remove it, and `end` is idempotent.
+  - `list` returns only open, visible entries, newest first, at most 50.
+  - **Out of order:** each report carries the Court's own rising `seq`, so an older report changes nothing. A removed Court leaves a marker, kept until its own expiry, so a late `join`, `leave`, `heartbeat` or `open` can't bring it back. The live reports (`open`, `heartbeat`, `join`, `leave`) carry the whole entry, and `heartbeat` carries `players`, so a lost `open` (or a restarted Lobby) is rebuilt by the next report.
+- **`party/src/lobby.ts`**, the `Lobby` DO (`global`), a thin shell:
+  - An RPC method `report`.
+  - Menu sockets get `{ t: 'courts', courts }` on connect, and again after every change, at most 4 a second.
+  - A 15 s sweep interval, only while someone is subscribed. It broadcasts when the list changed.
+  - Sends to a dead socket are swallowed, so a vanished subscriber can't make a Court's report throw. partyserver's `broadcast` would throw.
+- **`party/src/court.ts`:**
+  - Reports `open` on provision, `heartbeat` every 30 s until the start or close, `join` when a new Guest takes seat 1, `leave` when their seat is freed, `start`, `end` (Match over, or both Players gone) and `close`.
+  - Reports are fire-and-forget over RPC; a failure is logged with `console.warn`.
+  - Before the start it closes when the Host has been gone 15 s, or after 30 minutes with no Guest. It logs why, reports `close`, and sends `error { code: 'host_left' }` to a seated Guest.
+- **`party/src/courtSeats.ts`:**
+  - `HOST_RELOAD_MS = 15_000` is the Host's grace for a disconnect before the start. After the start, and for the Guest, it stays `GRACE_MS`.
+  - `IDLE_MS` (30 minutes) runs from `waitingSince`: when seat 1 was last free. `nextExpiry` includes it, so the Court's existing timer covers it.
+- **`party/src/worker.ts`:** upgrades to `/parties/lobby/global` are allowed, behind the same Origin check. Every other Lobby name gets 404, and `onRequest` is still never reached.
+- **Protocol:** `host_left` in `CourtErrorCode`, `LobbyCourt`, `LobbyMsg`, and the `isLobbyMsg` guard for 06. `PROTOCOL_VERSION` is 3, because an old client's `isCourtMsg` would drop `host_left`. `main.ts` got the string "The host left." because the error table is typed on `CourtErrorCode`.
+- **Smoke:** new `--lobby` and `--expire` modes. `party/README.md` documents both.
+
+**Results:**
+- Tests: 31 files and 290 tests pass. Before: 272. New:
+  - courtDirectory: 13
+  - courtSeats: 4 (reload grace, idle close, idle clock restart, no idle after start)
+  - protocol: 1
+- Typecheck (root and `party/`), build and e2e (16/16) pass. The golden result is unchanged. The handshake smoke passes 13/13.
+- `npm --prefix party run smoke -- --lobby` against `npm run party`:
+  ```
+  ok   the Lobby sends the list on connect
+  ok   a new Court is listed within 1 s of the create request (55 ms)
+  ok   the entry names the host and the Preset, with one Player
+  ok   it leaves the list when a Guest joins (220 ms)
+       the Guest leaves; their seat is freed after the 30 s grace
+  ok   it comes back once the Guest's seat is freed (30012 ms after they left)
+  ok   it leaves the list again for the next Guest (248 ms)
+  ok   both Players get start
+  ok   it stays off the list once the Match has started
+       two Hosts leave before the start, one alone and one with a Guest seated (15 s reload grace)
+  ok   the lone Host is listed and the full Court is not
+  ok   the lone Host's Court leaves the list after the grace (15030 ms)
+  ok   the seated Guest gets host_left (15038 ms after the Host left)
+  ok   the closed Court refuses a newcomer
+  ```
+- `--expire`, with the server started as `cd party && npx wrangler dev --var LOBBY_TTL_MS:5000`:
+  ```
+  ok   the Court is listed
+  ok   its entry expires with no reports (14910 ms: the TTL plus up to one 15 s sweep)
+  ```
+  You can't kill one Court under `wrangler dev`. With the TTL below the 30 s heartbeat, a live Court's entry gets no reports between heartbeats, exactly like a dead Court's.
+
+**Decisions where the issue left room:**
+- **`leave` is reported when the Guest's seat is freed** (30 s after they disconnect), not when the socket drops. Until then the token can still reclaim the seat, and a newcomer would get `full`, so listing the Court earlier would offer a row that can't be joined. If the row should come back sooner, the Guest's grace before the start has to shrink too.
+- **A Host who never connects** keeps the 30 s provision grace (time to load the Venue). The 15 s grace applies to a Host who connected and left. If they never connected, a seated Guest still gets `host_left`.
+- **`sweep` and `report` return whether the *list* changed**, not whether anything was removed. Dropping a hidden entry or a removed-Court marker needs no broadcast.
+- **The Lobby also sweeps on every report**, so the directory stays small while no one is subscribed. The 15 s interval still runs only with subscribers.
+- **"Removed on start" isn't visible from outside:** a started Court was already hidden by its `join`. The smoke checks that it stays off the list, and courtDirectory's tests cover the removal and a late `join` or `leave` after `start`.
+
+**Review (`/code-review`) fixes:** doc comments on `ReportOp` and `CourtDirectory`; `listed` became a type guard; a `hasSubscribers()` helper in the Lobby; no second `end` from a Court whose Match already ended.
+
+**Left as they are (review smells):**
+- The Court works out `join`/`leave` and why it closed by comparing Seats before and after (`seats[1] === null` in a few places). `courtSeats.join` and `expire` could return the lifecycle event instead.
+- `CourtInfo` (party) and `LobbyCourt` (src/net) repeat the same four fields.
+
+**Notes for later:**
+- `wrangler dev` logs `Uncaught Error: Network connection lost.` whenever a client closes its socket, to a Court as well as to the Lobby. It's workerd teardown noise that was already there before this issue. It's noted in the README.
+- 06: the menu subscribes to `/parties/lobby/global` and guards with `isLobbyMsg`. Handle `host_left` by returning to the list with "The host left."

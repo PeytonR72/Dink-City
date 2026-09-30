@@ -1,4 +1,4 @@
-import { Server, type Connection, type WSMessage } from 'partyserver';
+import { Server, getServerByName, type Connection, type WSMessage } from 'partyserver';
 import {
   COURT_CLOSE,
   PROTOCOL_VERSION,
@@ -18,10 +18,12 @@ import {
 } from '../../src/net';
 import { TICK, type SideIndex } from '../../src/sim';
 import { simTuning } from '../../src/tuning';
+import type { CourtInfo, CourtReport, ReportOp } from './courtDirectory';
 import { createCourtMatch, type CourtMatch } from './courtMatch';
 import * as seats from './courtSeats';
 import * as starting from './courtStart';
 import type { Env } from './env';
+import { LOBBY_NAME } from './lobby';
 import { createTickLoop, type TickLoop } from './tickLoop';
 
 /** Longer messages are dropped unread. A hello is about 150 bytes. */
@@ -32,6 +34,8 @@ const SIM_HASH = simHash(simTuning);
 const HZ = Math.round(1 / TICK);
 /** A late interval callback runs at most this many Ticks; the rest of a longer stall is dropped. */
 const MAX_CATCH_UP = 8;
+/** How often a Court that hasn't started tells the Lobby it's still there. */
+const HEARTBEAT_MS = 30_000;
 
 /** What the Worker sends when it creates the Court. */
 export interface ProvisionRequest {
@@ -45,7 +49,7 @@ export type ProvisionResult = { ok: true; hostToken: string } | { ok: false };
 
 /**
  * One Match, named by its Court code. A thin shell: the seat rules live in `courtSeats`, the start rules in
- * `courtStart`, and the Match itself in `courtMatch`, stepped by `tickLoop`.
+ * `courtStart`, and the Match itself in `courtMatch`, stepped by `tickLoop`. It reports its lifecycle to the Lobby.
  */
 export class Court extends Server<Env> {
   static override options = { hibernate: false };
@@ -60,6 +64,10 @@ export class Court extends Server<Env> {
   private match: CourtMatch | null = null;
   private loop: TickLoop | null = null;
   private interval: ReturnType<typeof setInterval> | null = null;
+  /** What the Lobby lists, and the number of the last report sent to it. */
+  private info: CourtInfo | null = null;
+  private reports = 0;
+  private heartbeat: ReturnType<typeof setInterval> | null = null;
 
   /** Called by the Worker over RPC. Only the first call provisions; any later one is refused and changes nothing. */
   provision(req: ProvisionRequest): ProvisionResult {
@@ -67,9 +75,13 @@ export class Court extends Server<Env> {
     const name = validateDisplayName(req.hostName);
     if (!name.ok || !isPresetId(req.preset) || !Number.isInteger(req.seed)) return { ok: false };
     const hostToken = crypto.randomUUID();
+    const now = Date.now();
     this.setup = { preset: req.preset, seed: req.seed };
-    this.seats = seats.provision(name.name, hostToken, Date.now());
+    this.seats = seats.provision(name.name, hostToken, now);
+    this.info = { code: this.name, hostName: name.name, preset: req.preset, createdAt: now };
     this.schedule();
+    this.report('open');
+    this.heartbeat = setInterval(() => this.report('heartbeat'), HEARTBEAT_MS);
     return { ok: true, hostToken };
   }
 
@@ -109,9 +121,11 @@ export class Court extends Server<Env> {
     const name = validateDisplayName(msg.name);
     if (!name.ok) return this.refuse(conn, 'bad_name');
     if (msg.protocolVersion !== PROTOCOL_VERSION || msg.simHash !== SIM_HASH) return this.refuse(conn, 'version');
+    const guestSeatFree = this.seats.seats[1] === null;
     const { seats: next, result } = seats.join(this.seats, { name: name.name, token: msg.token }, crypto.randomUUID());
     if (!result.ok) return this.refuse(conn, result.code);
     this.seats = next;
+    if (result.side === 1 && guestSeatFree) this.report('join');
     const replaced = this.holders[result.side];
     this.holders[result.side] = conn.id;
     // A token reclaimed a seat whose old connection is still open, such as a second tab.
@@ -156,6 +170,8 @@ export class Court extends Server<Env> {
   private start(): void {
     if (this.seats === null || this.setup === null) return;
     this.seats = seats.start(this.seats);
+    this.stopHeartbeat();
+    this.report('start');
     this.match = createCourtMatch({ ...this.setup, tuning: simTuning });
     this.loop = createTickLoop({ hz: HZ, maxCatchUp: MAX_CATCH_UP });
     this.loop.advance(Date.now());
@@ -175,7 +191,10 @@ export class Court extends Server<Env> {
       const conn = holder === null ? undefined : this.getConnection(holder);
       if (conn !== undefined) this.send(conn, msg);
     }
-    if (this.match.over) this.stopTicking(`the Match is over, ${this.match.state.match.points.join('-')}`);
+    if (this.match.over && this.interval !== null) {
+      this.stopTicking(`the Match is over, ${this.match.state.match.points.join('-')}`);
+      this.report('end');
+    }
   }
 
   /** `start`, naming both Players. Only called once the Court is provisioned. */
@@ -216,16 +235,55 @@ export class Court extends Server<Env> {
   }
 
   private expire(): void {
-    if (this.seats === null) return;
-    this.seats = seats.expire(this.seats, Date.now());
+    if (this.seats === null || this.seats.closed) return;
+    const before = this.seats;
+    this.seats = seats.expire(before, Date.now());
     for (const side of [0, 1] as const) if (this.seats.seats[side]?.status === 'gone') this.match?.gone(side);
-    if (this.seats.closed) {
-      this.stopTicking('both Players are gone');
-      this.clearStartTimer();
-      this.holders = [null, null];
-      for (const conn of this.getConnections()) conn.close(COURT_CLOSE, 'closed');
-    }
+    if (this.seats.closed) this.close(before);
+    else if (!before.started && before.seats[1] !== null && this.seats.seats[1] === null) this.report('leave');
     this.schedule();
+  }
+
+  /**
+   * Ends the Court. Before the start that's the Host leaving (or never connecting), which a seated Guest is told, or
+   * 30 minutes with no Guest; after it, both Players being gone.
+   */
+  private close(before: seats.Seats): void {
+    const guest = this.holders[1] === null ? undefined : this.getConnection(this.holders[1]);
+    this.stopTicking('both Players are gone');
+    this.stopHeartbeat();
+    this.clearStartTimer();
+    this.holders = [null, null];
+    if (before.started) {
+      // A Match that ended has already reported `end`.
+      if (this.match?.over !== true) this.report('end');
+    } else {
+      const hostLeft = before.seats[0]?.status !== 'connected';
+      console.log(`[court ${this.name}] closed before the start: ${hostLeft ? 'the Host left' : 'no Guest came'}`);
+      this.report('close');
+      if (hostLeft && guest !== undefined) this.refuse(guest, 'host_left');
+    }
+    for (const conn of this.getConnections()) conn.close(COURT_CLOSE, 'closed');
+  }
+
+  private stopHeartbeat(): void {
+    if (this.heartbeat !== null) clearInterval(this.heartbeat);
+    this.heartbeat = null;
+  }
+
+  /** Tells the Lobby, best-effort: a failed report is logged, and the entry heals by expiring. */
+  private report(op: ReportOp): void {
+    if (this.info === null || this.seats === null) return;
+    const seq = ++this.reports;
+    const r: CourtReport =
+      op === 'start' || op === 'end' || op === 'close'
+        ? { op, seq, code: this.info.code }
+        : op === 'heartbeat'
+          ? { op, seq, ...this.info, players: this.seats.seats[1] === null ? 1 : 2 }
+          : { op, seq, ...this.info };
+    getServerByName(this.env.LOBBY, LOBBY_NAME)
+      .then((lobby) => lobby.report(r))
+      .catch((e) => console.warn(`[court ${this.name}] Lobby report ${op} failed:`, e));
   }
 
   private send(conn: Connection, msg: CourtMsg): void {

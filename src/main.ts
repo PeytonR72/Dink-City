@@ -242,6 +242,7 @@ const COURT_ERRORS: Record<CourtErrorCode, string> = {
   bad_name: 'That Display name is not allowed.',
   version: 'This game is out of date. Reload to update it.',
   bad_message: 'The Court did not understand this game.',
+  host_left: 'The host left.',
 };
 
 /**

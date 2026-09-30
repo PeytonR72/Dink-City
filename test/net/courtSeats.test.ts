@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   GRACE_MS,
+  HOST_RELOAD_MS,
+  IDLE_MS,
   disconnect,
   expire,
   join,
@@ -35,7 +37,7 @@ describe('Court seats', () => {
     const { seats, result } = join(provision('Host', 'host-tok', T0), { name: 'Host', token: 'host-tok' }, 'unused');
     expect(result).toEqual({ ok: true, side: 0, token: 'host-tok' });
     expect(seats.seats[0]?.status).toBe('connected');
-    expect(nextExpiry(seats)).toBeNull();
+    expect(nextExpiry(seats)).toBe(T0 + IDLE_MS);
   });
 
   it('gives the first tokenless hello seat 1, with the new token', () => {
@@ -97,10 +99,11 @@ describe('Court seats', () => {
     expect(join(freed, { name: 'Guest', token: 'guest-tok' }, 'fresh').result).toEqual({ ok: true, side: 1, token: 'fresh' });
   });
 
-  it('closes the Court once a Host who left before start runs out of grace', () => {
+  it('closes the Court once a Host who left before start runs out of their shorter reload grace', () => {
     const left = disconnect(full(), 0, T0);
-    expect(expire(left, T0 + GRACE_MS - 1).closed).toBe(false);
-    const closed = expire(left, T0 + GRACE_MS);
+    expect(left.seats[0]).toMatchObject({ status: 'grace', until: T0 + HOST_RELOAD_MS });
+    expect(expire(left, T0 + HOST_RELOAD_MS - 1).closed).toBe(false);
+    const closed = expire(left, T0 + HOST_RELOAD_MS);
     expect(closed.closed).toBe(true);
     expect(nextExpiry(closed)).toBeNull();
     expect(join(closed, { name: 'Late' }, 'late-tok').result).toEqual({ ok: false, code: 'not_found' });
@@ -114,7 +117,37 @@ describe('Court seats', () => {
   it('keeps the Court open when a Host reloads within the grace', () => {
     const back = join(disconnect(full(), 0, T0), { name: 'Host', token: 'host-tok' }, 'x');
     expect(back.result).toEqual({ ok: true, side: 0, token: 'host-tok' });
-    expect(expire(back.seats, T0 + GRACE_MS).closed).toBe(false);
+    expect(expire(back.seats, T0 + HOST_RELOAD_MS).closed).toBe(false);
+  });
+
+  it('gives a Host who leaves after the start the full grace', () => {
+    expect(disconnect(start(full()), 0, T0).seats[0]).toMatchObject({ status: 'grace', until: T0 + GRACE_MS });
+  });
+
+  it('closes a Court that waits 30 minutes with no Guest', () => {
+    const s = hosted();
+    expect(expire(s, T0 + IDLE_MS - 1).closed).toBe(false);
+    const closed = expire(s, T0 + IDLE_MS);
+    expect(closed.closed).toBe(true);
+    expect(nextExpiry(closed)).toBeNull();
+  });
+
+  it('stops the idle clock while a Guest is seated, and restarts it when their seat is freed', () => {
+    expect(nextExpiry(full())).toBeNull();
+    expect(expire(full(), T0 + IDLE_MS).closed).toBe(false);
+    // The Guest leaves at 20 min; their seat is freed 30 s later, and the Court waits another 30 min from then.
+    const freedAt = T0 + 20 * 60_000 + GRACE_MS;
+    const freed = expire(disconnect(full(), 1, T0 + 20 * 60_000), freedAt);
+    expect(freed.seats[1]).toBeNull();
+    expect(nextExpiry(freed)).toBe(freedAt + IDLE_MS);
+    expect(expire(freed, T0 + IDLE_MS).closed).toBe(false);
+    expect(expire(freed, freedAt + IDLE_MS).closed).toBe(true);
+  });
+
+  it('has no idle close once the Match has started', () => {
+    const started = start(full());
+    expect(nextExpiry(started)).toBeNull();
+    expect(expire(started, T0 + 10 * IDLE_MS).closed).toBe(false);
   });
 
   it('after start, keeps an expired seat as gone rather than freeing it or closing', () => {
@@ -137,7 +170,7 @@ describe('Court seats', () => {
   });
 
   it('reports the earliest grace end to schedule the timer', () => {
-    const both = disconnect(disconnect(full(), 1, T0 + 2_000), 0, T0 + 1_000);
+    const both = disconnect(disconnect(start(full()), 1, T0 + 2_000), 0, T0 + 1_000);
     expect(nextExpiry(both)).toBe(T0 + 1_000 + GRACE_MS);
     expect(nextExpiry(full())).toBeNull();
   });

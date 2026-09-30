@@ -4,24 +4,37 @@ import type { CourtErrorCode, CourtPlayer } from '../../src/net';
 
 /** How long a disconnected Player keeps their seat. */
 export const GRACE_MS = 30_000;
+/** A Host who leaves before the start gets only this long to reload before the Court closes. */
+export const HOST_RELOAD_MS = 15_000;
+/** A Court that waits this long for a Guest closes. */
+export const IDLE_MS = 30 * 60_000;
 
 /** `grace`: disconnected, or never connected, until `until`. `gone`: the grace ran out after the Match started. */
 export type Seat = { name: string; token: string } & SeatStatus;
 
 type SeatStatus = { status: 'connected' } | { status: 'grace'; until: number } | { status: 'gone' };
 
-/** Seat 0 is the Host's, seat 1 the Guest's. A closed Court takes no one. */
+/**
+ * Seat 0 is the Host's, seat 1 the Guest's. A closed Court takes no one. `waitingSince`: when seat 1 was last free
+ * before the start, for the idle close; null while a Guest holds it and after the start.
+ */
 export interface Seats {
   seats: [Seat | null, Seat | null];
   started: boolean;
   closed: boolean;
+  waitingSince: number | null;
 }
 
 export type JoinResult = { ok: true; side: SideIndex; token: string } | { ok: false; code: Extract<CourtErrorCode, 'full' | 'not_found'> };
 
 /** The Host holds seat 0 from the start, with a grace period to connect. */
 export function provision(hostName: string, hostToken: string, now: number): Seats {
-  return { seats: [{ name: hostName, token: hostToken, status: 'grace', until: now + GRACE_MS }, null], started: false, closed: false };
+  return {
+    seats: [{ name: hostName, token: hostToken, status: 'grace', until: now + GRACE_MS }, null],
+    started: false,
+    closed: false,
+    waitingSince: now,
+  };
 }
 
 /**
@@ -37,41 +50,49 @@ export function join(s: Seats, hello: { name: string; token?: string }, newToken
     return { seats: withSeat(s, side as SideIndex, withStatus(seat, { status: 'connected' })), result: { ok: true, side: side as SideIndex, token: seat.token } };
   }
   if (s.seats[1] !== null) return { seats: s, result: { ok: false, code: 'full' } };
-  return { seats: withSeat(s, 1, { name: hello.name, token: newToken, status: 'connected' }), result: { ok: true, side: 1, token: newToken } };
+  const seats = { ...withSeat(s, 1, { name: hello.name, token: newToken, status: 'connected' }), waitingSince: null };
+  return { seats, result: { ok: true, side: 1, token: newToken } };
 }
 
-/** Starts the grace period of a connected seat. */
+/** Starts the grace period of a connected seat: the Host's is shorter before the start. */
 export function disconnect(s: Seats, side: SideIndex, now: number): Seats {
   const seat = s.seats[side];
   if (seat?.status !== 'connected') return s;
-  return withSeat(s, side, withStatus(seat, { status: 'grace', until: now + GRACE_MS }));
+  const grace = side === 0 && !s.started ? HOST_RELOAD_MS : GRACE_MS;
+  return withSeat(s, side, withStatus(seat, { status: 'grace', until: now + grace }));
 }
 
 /**
  * Ends every grace period that ran out by `now`. Before the start, a Guest's seat is freed and a Host's closes
- * the Court. After it, the seat is `gone`, and the Court closes once both are.
+ * the Court, as does waiting `IDLE_MS` with no Guest. After the start, the seat is `gone`, and the Court closes once
+ * both are.
  */
 export function expire(s: Seats, now: number): Seats {
+  if (s.closed) return s;
+  const closed: Seats = { seats: [null, null], started: s.started, closed: true, waitingSince: null };
   let next = s;
   for (const side of [0, 1] as const) {
     const seat = next.seats[side];
     if (seat?.status !== 'grace' || seat.until > now) continue;
     if (next.started) next = withSeat(next, side, withStatus(seat, { status: 'gone' }));
-    else if (side === 1) next = withSeat(next, 1, null);
-    else return { seats: [null, null], started: false, closed: true };
+    else if (side === 1) next = { ...withSeat(next, 1, null), waitingSince: seat.until };
+    else return closed;
   }
   if (next.started && next.seats.every((seat) => seat?.status === 'gone')) return { ...next, closed: true };
+  if (next.waitingSince !== null && now >= next.waitingSince + IDLE_MS) return closed;
   return next;
 }
 
 /** The Match has begun: from now on an expired seat is `gone`, not freed. */
 export function start(s: Seats): Seats {
-  return { ...s, started: true };
+  return { ...s, started: true, waitingSince: null };
 }
 
-/** When the earliest grace period ends, for the Court's timer; null if none is running. */
+/** When the earliest grace period or the idle wait ends, for the Court's timer; null if none is running. */
 export function nextExpiry(s: Seats): number | null {
+  if (s.closed) return null;
   const ends = s.seats.flatMap((seat) => (seat?.status === 'grace' ? [seat.until] : []));
+  if (s.waitingSince !== null) ends.push(s.waitingSince + IDLE_MS);
   return ends.length > 0 ? Math.min(...ends) : null;
 }
 
