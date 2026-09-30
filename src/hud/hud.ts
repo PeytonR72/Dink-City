@@ -4,7 +4,6 @@ import { calloutFor } from './callout';
 import { faultText, type FaultText } from './faultText';
 import { reveal, revealSeconds } from './reveal';
 
-const NAMES = ['YOU', 'BOT'] as const;
 const BANNER_SECONDS = 2.2;
 /** The banner lingers this long after a Replay. */
 const AFTER_REPLAY_SECONDS = 0.6;
@@ -35,6 +34,10 @@ export class Hud {
   private bannerTimer = 0;
   private sticky = false;
   private revealing: Reveal | null = null;
+  /** The other Player's name: the Bot offline, a Display name online. */
+  private opponent = 'Bot';
+  /** Offline a shot press after the Match starts another; online there's no rematch yet (issue 13). */
+  private rematch = true;
 
   constructor(
     root: HTMLElement,
@@ -68,7 +71,7 @@ export class Hud {
   update(s: SimState, dt: number) {
     this.order().forEach((side, row) => {
       const el = this.rows[row];
-      el.querySelector('.name')!.textContent = NAMES[side === this.local ? 0 : 1];
+      el.querySelector('.name')!.textContent = side === this.local ? 'YOU' : this.opponent.toUpperCase();
       el.querySelector('.points')!.textContent = String(s.match.points[side]);
       el.classList.toggle('serving', s.server === side && s.match.winner === null);
     });
@@ -91,18 +94,25 @@ export class Hud {
       } else if (e.kind === 'rally-won' && e.sideOut) {
         this.appendDetail('Side out.');
       } else if (e.kind === 'game' && s.match.winner === null) {
-        this.appendDetail(`${e.winner === this.local ? 'You win' : 'Bot wins'} the game. Switching ends.`);
+        this.appendDetail(`${e.winner === this.local ? 'You win' : `${this.opponent} wins`} the game. Switching ends.`);
       } else if (e.kind === 'match') {
         // Best of 3 reports Games won; a single Game reports its points.
         const tally = s.match.config.bestOf > 1 ? s.match.games : s.match.points;
         const [a, b] = this.order().map((side) => tally[side]);
         this.show({
-          title: e.winner === this.local ? 'YOU WIN' : 'BOT WINS',
-          detail: `${a}–${b}. Press J, K or L to play again, or Esc for the menu.`,
+          title: e.winner === this.local ? 'YOU WIN' : `${this.opponent.toUpperCase()} WINS`,
+          detail: `${a}–${b}. ${this.rematch ? 'Press J, K or L to play again, or Esc for the menu.' : 'Press Esc for the menu.'}`,
         });
         this.sticky = true;
       }
     }
+  }
+
+  /** An online Match: this screen plays `local`, against the Player named `opponent`, with no rematch. */
+  setOnline(local: SideIndex, opponent: string) {
+    this.local = local;
+    this.opponent = opponent;
+    this.rematch = false;
   }
 
   /** Holds the Fault banner up, tagged REPLAY, while a Replay plays. */

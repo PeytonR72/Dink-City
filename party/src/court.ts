@@ -1,5 +1,6 @@
 import { Server, type Connection, type WSMessage } from 'partyserver';
 import {
+  COURT_CLOSE,
   PROTOCOL_VERSION,
   decode,
   encode,
@@ -114,13 +115,13 @@ export class Court extends Server<Env> {
     const replaced = this.holders[result.side];
     this.holders[result.side] = conn.id;
     // A token reclaimed a seat whose old connection is still open, such as a second tab.
-    if (replaced !== null) this.getConnection(replaced)?.close(4000, 'replaced');
+    if (replaced !== null) this.getConnection(replaced)?.close(COURT_CLOSE, 'replaced');
     this.gate = starting.seated(this.gate, result.side, result.token, Date.now());
     this.schedule();
     this.send(conn, { t: 'welcome', side: result.side, token: result.token, preset: this.setup.preset, players: seats.players(next) });
     // A Player reloading mid-Match rebuilds from `start` and the current Snapshot, and learns if it's already over.
     if (this.match === null) return this.maybeStart();
-    this.send(conn, { t: 'start', ...this.setup });
+    this.send(conn, this.startMsg());
     for (const msg of this.match.current(result.side)) this.send(conn, msg);
   }
 
@@ -158,7 +159,7 @@ export class Court extends Server<Env> {
     this.match = createCourtMatch({ ...this.setup, tuning: simTuning });
     this.loop = createTickLoop({ hz: HZ, maxCatchUp: MAX_CATCH_UP });
     this.loop.advance(Date.now());
-    for (const conn of this.getConnections()) if (this.holders.includes(conn.id)) this.send(conn, { t: 'start', ...this.setup });
+    for (const conn of this.getConnections()) if (this.holders.includes(conn.id)) this.send(conn, this.startMsg());
     this.interval = setInterval(() => this.tick(), 1000 / HZ);
     console.log(`[court ${this.name}] Match started (${this.setup.preset}, seed ${this.setup.seed})`);
   }
@@ -175,6 +176,11 @@ export class Court extends Server<Env> {
       if (conn !== undefined) this.send(conn, msg);
     }
     if (this.match.over) this.stopTicking(`the Match is over, ${this.match.state.match.points.join('-')}`);
+  }
+
+  /** `start`, naming both Players. Only called once the Court is provisioned. */
+  private startMsg(): CourtMsg {
+    return { t: 'start', ...this.setup!, players: seats.players(this.seats!) };
   }
 
   private clearStartTimer(): void {
@@ -217,7 +223,7 @@ export class Court extends Server<Env> {
       this.stopTicking('both Players are gone');
       this.clearStartTimer();
       this.holders = [null, null];
-      for (const conn of this.getConnections()) conn.close(4000, 'closed');
+      for (const conn of this.getConnections()) conn.close(COURT_CLOSE, 'closed');
     }
     this.schedule();
   }
@@ -229,6 +235,6 @@ export class Court extends Server<Env> {
 
   private refuse(conn: Connection, code: CourtErrorCode): void {
     this.send(conn, { t: 'error', code });
-    conn.close(4000, code);
+    conn.close(COURT_CLOSE, code);
   }
 }

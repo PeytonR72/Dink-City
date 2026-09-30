@@ -238,19 +238,23 @@ export class Renderer {
     const end = endOf(curr, i);
     const player = curr.sides[i].players[0];
     const prevPos = prev.sides[i].players[0].pos;
-    const moved = curr.tick > prev.tick ? { x: (player.pos.x - prevPos.x) / TICK, z: (player.pos.z - prevPos.z) / TICK } : { x: 0, z: 0 };
+    // Offline the two states are one Tick apart; online they're Snapshots, two apart.
+    const span = (curr.tick - prev.tick) * TICK;
+    const moved = span > 0 ? { x: (player.pos.x - prevPos.x) / span, z: (player.pos.z - prevPos.z) / span } : { x: 0, z: 0 };
     // Teleports between points aren't walking.
     const vel = Math.hypot(moved.x, moved.z) > 20 ? { x: 0, z: 0 } : moved;
     const lv = toCharacter(end, { x: 0, y: 0, z: 0 }, { x: vel.x, y: 0, z: vel.z });
 
     const predicted = player.commit ? predictContact(curr, i, this.sim) : null;
     const hit = this.players[i].lastHit;
-    const swingSeconds = hit ? (curr.tick + alpha - hit.tick) * TICK : Infinity;
+    // `curr.tick + alpha` when they're one Tick apart, the same moment between Snapshots further apart.
+    const now = curr.tick + 1 - (1 - alpha) * Math.max(1, curr.tick - prev.tick);
+    const swingSeconds = hit ? (now - hit.tick) * TICK : Infinity;
     return {
       velocity: { x: lv.x, z: lv.z },
       committed: player.commit !== null,
       contact: predicted && {
-        seconds: Math.max(0, (predicted.ticks - alpha) * TICK),
+        seconds: Math.max(0, (curr.tick + predicted.ticks - now) * TICK),
         pos: toCharacter(end, player.pos, predicted.pos),
         variant: predicted.variant,
       },

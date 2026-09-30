@@ -4,10 +4,13 @@ import { DIFFICULTY, createBot } from './bot/bot';
 import { PERSONALITY, type PersonalityName } from './bot/personality';
 import { Hud } from './hud/hud';
 import { Input } from './input/input';
+import type { MatchDriver, MatchView } from './match/driver';
+import type { OnlineMatch } from './match/online';
 import { LocalMatch } from './match/local';
 import { Locker } from './menu/locker';
 import { CityMap } from './menu/map';
 import { Overlay, SettingsPanel } from './menu/menu';
+import { COURT_CLOSE, DEFAULT_PRESET, PRESETS, isPresetId, validateDisplayName, type CourtErrorCode } from './net';
 import { PRACTICE_STEPS, Practice, REPS_TO_PASS, createMachine } from './practice/practice';
 import { DEFAULT_PLAYER_COLORS, loadModels, loadSurroundings } from './render/models';
 import { Renderer } from './render/renderer';
@@ -15,16 +18,19 @@ import { loadColors, saveColors } from './save/colors';
 import { isUnlocked, loadProgress, recordWin, saveProgress } from './save/progress';
 import { loadSettings, saveSettings, withFlags, type Settings } from './save/settings';
 import { browserStore } from './save/store';
-import { DEFAULT_MATCH, TICK, createInitialState, endOf, type Intent, type SimEvent, type SimState } from './sim';
+import { DEFAULT_MATCH, TICK, createInitialState, endOf, other, type Intent, type SideIndex, type SimEvent, type SimState } from './sim';
 import { simTuning, viewTuning } from './tuning';
 import { VENUE_ASSETS } from './venue/assets';
 import { VENUES, VENUE_IDS, type VenueId } from './venue/venues';
 
 const MAX_FRAME = 0.25;
+const STILL: Intent = { move: { x: 0, y: 0 }, aim: { x: 0, y: 0 }, shot: null };
 
 // Flags for playtesting override the saved Settings: ?rally, ?bo3, ?bot=easy|medium|hard, ?sunset.
 // ?play skips the menu and starts a Match; ?venue=park|rooftop|beach picks its Venue, locked or not.
 // ?personality=dinker|banger|lobber overrides the Venue Bot's Personality. ?practice starts Practice mode.
+// In dev only, until the menu's online panel (issue 06): ?host=quick|standard|long&name=Ana creates a Court and
+// joins it, and ?court=CODE&name=Ana joins one.
 const params = new URLSearchParams(location.search);
 const store = browserStore();
 let saved = loadSettings(store);
@@ -41,41 +47,46 @@ const models = await loadModels().catch(failed);
 const renderer = new Renderer(canvas, viewTuning, simTuning, models);
 const input = new Input();
 const eventLog: ({ tick: number } & SimEvent)[] = [];
-/** The Match in play. Offline for now; online play will add another driver. */
-const match = new LocalMatch({
+/** Where either driver shows the Match: the Hud, the renderer and the sounds. */
+const view: MatchView = {
+  tick(s, events) {
+    const practice = match === offline ? offline.practice : null;
+    if (practice) {
+      // Practice judges each rep itself; the Match banners (a Bot "letting it bounce twice") would mislead.
+      const outcome = practice.onEvents(events);
+      if (outcome) {
+        hud.banner(outcome);
+        showPractice();
+      }
+    } else hud.onEvents(s, events);
+    showSwingsAndSounds(s, events);
+    for (const e of events) {
+      eventLog.push({ tick: s.tick, ...e });
+      // Online Matches earn no progress (ADR-0004).
+      if (e.kind === 'match' && e.winner === match.local && match === offline) onMatchWon();
+    }
+    if (eventLog.length > 100) eventLog.splice(0, eventLog.length - 100);
+  },
+  replay(on) {
+    hud.setReplay(on);
+    renderer.cut();
+  },
+  replayed: showSwingsAndSounds,
+  draw(prev, curr, alpha, live, dt) {
+    hud.update(live, dt);
+    renderer.render(prev, curr, alpha, dt);
+  },
+};
+/** The offline Match or Practice, against the Venue's Bot or the ball machine. */
+const offline = new LocalMatch({
   sim: simTuning,
   viewTuning,
   input: () => input.sample(),
   rematch: () => newMatch(Date.now()),
-  view: {
-    tick(s, events) {
-      const { practice, local } = match;
-      if (practice) {
-        // Practice judges each rep itself; the Match banners (a Bot "letting it bounce twice") would mislead.
-        const outcome = practice.onEvents(events);
-        if (outcome) {
-          hud.banner(outcome);
-          showPractice();
-        }
-      } else hud.onEvents(s, events);
-      showSwingsAndSounds(s, events);
-      for (const e of events) {
-        eventLog.push({ tick: s.tick, ...e });
-        if (e.kind === 'match' && e.winner === local) onMatchWon();
-      }
-      if (eventLog.length > 100) eventLog.splice(0, eventLog.length - 100);
-    },
-    replay(on) {
-      hud.setReplay(on);
-      renderer.cut();
-    },
-    replayed: showSwingsAndSounds,
-    draw(prev, curr, alpha, live, dt) {
-      hud.update(live, dt);
-      renderer.render(prev, curr, alpha, dt);
-    },
-  },
+  view,
 });
+/** The Match in play: `offline`, or an online one once its Court starts it. */
+let match: MatchDriver = offline;
 renderer.setLocalSide(match.local);
 
 /** Live or replayed: where each hit was met, and the sounds. */
@@ -97,12 +108,18 @@ async function showVenue(id: VenueId) {
   const surroundings = await loadSurroundings(VENUE_ASSETS[id].model);
   venue = id;
   renderer.setVenue(VENUES[id], surroundings);
-  // Side 1 is the offline Bot; online Matches will color it differently.
-  renderer.setColors(1, { ...DEFAULT_PLAYER_COLORS, ...VENUES[id].bot });
+  // The other Side wears the Venue Bot's colors, online too for now.
+  renderer.setColors(other(match.local), botColors(id));
   void setAmbience(VENUE_ASSETS[id].ambience, viewTuning);
 }
 
-type Mode = 'menu' | 'locker' | 'match' | 'paused';
+/** `online` covers joining a Court, waiting for its Match, and being disconnected from it. */
+/** The colors of `id`'s Bot. */
+function botColors(id: VenueId) {
+  return { ...DEFAULT_PLAYER_COLORS, ...VENUES[id].bot };
+}
+
+type Mode = 'menu' | 'locker' | 'match' | 'paused' | 'online';
 let mode: Mode = 'menu';
 
 const menu = new Overlay(
@@ -147,7 +164,15 @@ const pause = new Overlay(
   <button id="quit">Quit to map</button>`,
 );
 pause.on('#resume', () => setMode('match'));
-pause.on('#quit', () => setMode('menu'));
+pause.on('#quit', () => quitToMenu());
+
+const onlineStatus = new Overlay(
+  'online',
+  `<h1>Online</h1>
+  <p class="online-status"></p>
+  <button id="leave">Leave</button>`,
+);
+onlineStatus.on('#leave', () => quitToMenu());
 
 /** The Difficulty of the Match in play, for its star. */
 let difficulty = settings().difficulty;
@@ -163,23 +188,24 @@ function newMatch(seed: number) {
   const bot = createBot(1, seed ^ 0x5eed, DIFFICULTY[s.difficulty], simTuning, personality);
   renderer.setMachine(false);
   hud.setPractice(null);
-  match.startMatch(createInitialState(seed, { ...DEFAULT_MATCH, rallyScoring: s.rallyScoring, bestOf: s.bestOf }), bot);
+  offline.startMatch(createInitialState(seed, { ...DEFAULT_MATCH, rallyScoring: s.rallyScoring, bestOf: s.bestOf }), bot);
   hud.reset();
 }
 
 /** Practice mode at the Venue on show: the ball machine plays Side 1, and there is no score. */
 function startPractice() {
+  if (match !== offline) return;
   const p = new Practice();
   const machine = createMachine(Date.now(), simTuning, () => p.step);
   renderer.setMachine(true);
-  match.startPractice(p, machine);
+  offline.startPractice(p, machine);
   hud.reset();
   showPractice();
   setMode('match');
 }
 
 function showPractice() {
-  const p = match.practice!;
+  const p = offline.practice!;
   const free = p.step.id === 'free';
   hud.setPractice({ step: p.stepNumber, steps: PRACTICE_STEPS.length, title: p.step.title, prompt: p.step.prompt, reps: p.reps, needed: free ? 0 : REPS_TO_PASS });
 }
@@ -201,10 +227,95 @@ function onMatchWon() {
   if (opened) hud.note(`${VENUES[opened].name} is open!`);
 }
 
+/** Online, drives the local Player instead of the keyboard: called once per Tick with the newest Snapshot's state. */
+let drive: ((s: SimState) => Intent) | null = null;
+
+/** Back to the map. Leaving an online Match reloads the page offline, which drops the Court and its driver. */
+function quitToMenu() {
+  if (match === offline) return setMode('menu');
+  location.assign(location.pathname);
+}
+
+const COURT_ERRORS: Record<CourtErrorCode, string> = {
+  full: 'That Court is full.',
+  not_found: 'There is no Court with that code.',
+  bad_name: 'That Display name is not allowed.',
+  version: 'This game is out of date. Reload to update it.',
+  bad_message: 'The Court did not understand this game.',
+};
+
+/**
+ * Joins the Court in `?court=`, or creates one with the Preset in `?host=` first, then plays its Match as the
+ * Display name in `?name=`. The Hud, renderer and colors follow the seat the Court gives.
+ */
+async function goOnline() {
+  const status = (text: string) => {
+    onlineStatus.el.querySelector('.online-status')!.textContent = text;
+    setMode('online');
+  };
+  status('Connecting…');
+  const name = validateDisplayName(params.get('name') ?? 'Player');
+  if (!name.ok) return status(COURT_ERRORS.bad_name);
+  const [{ createCourt, joinCourt }, { OnlineMatch: Online }] = await Promise.all([import('./online/connection'), import('./match/online')]);
+
+  let code = params.get('court')?.toUpperCase() ?? '';
+  if (code === '') {
+    const preset = params.get('host');
+    try {
+      code = await createCourt(name.name, isPresetId(preset) ? preset : DEFAULT_PRESET);
+    } catch (e) {
+      return status(`Could not create a Court: ${(e as Error).message}`);
+    }
+    // A reload rejoins this Court as its Host.
+    params.delete('host');
+    params.set('court', code);
+    history.replaceState(null, '', `?${params}`);
+  }
+
+  let side: SideIndex = 0;
+  let online: OnlineMatch | null = null;
+  const link = joinCourt(code, name.name, {
+    onMessage(msg) {
+      if (msg.t === 'welcome') {
+        side = msg.side;
+        status(`Court ${code}. Waiting for the Match to start…`);
+        // The Venue is on show already.
+        link.send({ t: 'ready' });
+      } else if (msg.t === 'start') {
+        online = new Online({
+          local: side,
+          start: createInitialState(msg.seed, PRESETS[msg.preset].config),
+          view,
+          input: () => (mode !== 'match' ? STILL : drive ? drive(online!.latest) : input.sample()),
+          send: (m) => link.send(m),
+        });
+        match = online;
+        renderer.setLocalSide(side);
+        renderer.setMachine(false);
+        renderer.setColors(side, colors);
+        renderer.setColors(other(side), botColors(venue));
+        renderer.cut();
+        hud.setOnline(side, msg.players[other(side)]?.name ?? 'Player');
+        hud.setPractice(null);
+        hud.reset();
+        setMode('match');
+      } else if (msg.t === 'snap') online?.receive(msg);
+      else if (msg.t === 'error') status(COURT_ERRORS[msg.code]);
+    },
+    onClose(closeCode, reason) {
+      // A refusal already said why.
+      if (Object.hasOwn(COURT_ERRORS, reason)) return;
+      if (reason === 'replaced') status('This seat is being played in another tab.');
+      else status(closeCode === COURT_CLOSE ? 'The Court has closed.' : 'Lost the connection to the Court. Reload to rejoin.');
+    },
+  });
+}
+
 function setMode(m: Mode) {
   mode = m;
   menu.el.hidden = m !== 'menu';
   pause.el.hidden = m !== 'paused';
+  onlineStatus.el.hidden = m !== 'online';
   if (m === 'locker') locker.show();
   else locker.hide();
   if (m === 'menu') {
@@ -219,26 +330,30 @@ function setMode(m: Mode) {
 }
 
 newMatch(Date.now());
-if (params.has('practice')) startPractice();
+// Dev only until issue 16: a production build has no way online.
+if (import.meta.env.DEV && (params.has('court') || params.has('host'))) void goOnline();
+else if (params.has('practice')) startPractice();
 else setMode(params.has('play') ? 'match' : 'menu');
 // The menu doesn't draw the court, so draw it once: the Park stands behind the map until a Venue is played.
 if (mode === 'menu') renderer.render(match.prev, match.curr, 1, 0);
 
 if (import.meta.env.DEV && params.has('debug')) {
   import('./debug/panel').then(({ createDebugPanel }) => createDebugPanel(simTuning, viewTuning, DIFFICULTY[settings().difficulty]));
-  import('./debug/overlays').then(({ createOverlays }) => createOverlays(renderer, simTuning, () => match.bot));
+  import('./debug/overlays').then(({ createOverlays }) => createOverlays(renderer, simTuning, () => offline.bot));
 }
 
-// Exposed for playtests and console poking.
+// Exposed for playtests and console poking. Online, `state` is the state drawn; `rally`, `replay` and `practice` are
+// null; `advance` and `startPractice` throw, since the Court steps the Match; and `drive` sets the local Player's
+// input (null gives it back to the keyboard). `frames` runs either kind of Match.
 (window as unknown as { dink: unknown }).dink = {
   get state() {
     return match.curr;
   },
   get rally() {
-    return match.rally;
+    return match === offline ? offline.rally : null;
   },
   get replay() {
-    return match.replay;
+    return match === offline ? offline.replay : null;
   },
   get mode() {
     return mode;
@@ -251,9 +366,22 @@ if (import.meta.env.DEV && params.has('debug')) {
   eventLog,
   newMatch,
   playVenue,
-  startPractice,
+  startPractice() {
+    if (match !== offline) throw new Error('Practice is offline only');
+    startPractice();
+  },
   get practice() {
-    return match.practice;
+    return match === offline ? offline.practice : null;
+  },
+  /** Online only: the Side this screen plays, or null offline. */
+  get online() {
+    return match === offline ? null : { side: match.local };
+  },
+  get drive() {
+    return drive;
+  },
+  set drive(fn: ((s: SimState) => Intent) | null) {
+    drive = fn;
   },
   get progress() {
     return progress;
@@ -268,10 +396,11 @@ if (import.meta.env.DEV && params.has('debug')) {
   },
   /** Step N Ticks synchronously (works while the tab is hidden). `drive` overrides local input. */
   advance(ticks: number, drive?: (s: SimState) => Intent) {
-    for (let i = 0; i < ticks; i++) match.tick(drive?.(match.curr));
-    renderer.render(match.prev, match.curr, 1, TICK);
-    hud.update(match.curr, ticks * TICK);
-    return match.curr;
+    if (match !== offline) throw new Error('advance is offline only: the Court steps an online Match');
+    for (let i = 0; i < ticks; i++) offline.tick(drive?.(offline.curr));
+    renderer.render(offline.prev, offline.curr, 1, TICK);
+    hud.update(offline.curr, ticks * TICK);
+    return offline.curr;
   },
   /** Run N frames of `dt` seconds synchronously, as rAF would (Replays, menus, hit-stop included). */
   frames(n: number, dt = 1 / 60) {
@@ -291,7 +420,7 @@ function update(dt: number) {
   updateAmbience(viewTuning);
 
   if (input.pausePressed()) {
-    if (mode === 'match' && match.curr.phase === 'over') setMode('menu');
+    if (mode === 'match' && match.curr.phase === 'over') quitToMenu();
     else if (mode === 'match') setMode('paused');
     else if (mode === 'paused') setMode('match');
     else if (mode === 'locker') setMode('menu');
@@ -300,10 +429,13 @@ function update(dt: number) {
   if (mode === 'menu') {
     // The map is drawn instead of the court, which keeps its last frame behind the menu.
     map.draw(dt);
-  } else if (mode !== 'match') {
+  } else if (mode === 'match' || (mode === 'paused' && match !== offline)) {
+    // The Court doesn't wait, so an online Match plays on behind the pause menu.
+    match.frame(dt);
+  } else {
     // The court sits still behind the other menus.
     renderer.render(match.prev, match.curr, 1, dt);
-  } else match.frame(dt);
+  }
 }
 
 requestAnimationFrame(frame);
