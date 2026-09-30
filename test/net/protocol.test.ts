@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { PROTOCOL_VERSION, decode, encode, isHello, type CourtMsg } from '../../src/net';
+import { PROTOCOL_VERSION, decode, encode, isHello, isIn, isReady, type CourtMsg } from '../../src/net';
 
 const hello = { t: 'hello', name: 'Pat', protocolVersion: PROTOCOL_VERSION, simHash: '0123abcd' };
 
@@ -31,5 +31,34 @@ describe('the Court protocol', () => {
       { t: 'hello' },
     ];
     for (const msg of bad) expect(isHello(msg), JSON.stringify(msg)).toBe(false);
+  });
+
+  it('guards a ready', () => {
+    expect(isReady({ t: 'ready' })).toBe(true);
+    expect(isReady({ t: 'hello' })).toBe(false);
+    expect(isReady(null)).toBe(false);
+  });
+
+  it('guards an in', () => {
+    expect(isIn({ t: 'in', tick: 0, intent: [0, 0, 0, 0, 0] })).toBe(true);
+    expect(isIn({ t: 'in', tick: 1234, intent: [127, -127, 64, -1, 7] })).toBe(true);
+  });
+
+  it('refuses an in with a bad Tick or a malformed Intent', () => {
+    const bad: unknown[] = [
+      { t: 'in', tick: -1, intent: [0, 0, 0, 0, 0] },
+      { t: 'in', tick: 1.5, intent: [0, 0, 0, 0, 0] },
+      { t: 'in', tick: '3', intent: [0, 0, 0, 0, 0] },
+      { t: 'in', tick: 3 },
+      { t: 'in', tick: 3, intent: [0, 0, 0, 0] },
+      { t: 'in', tick: 3, intent: [0, 0, 0, 0, 0, 0] },
+      { t: 'in', tick: 3, intent: [128, 0, 0, 0, 0] },
+      { t: 'in', tick: 3, intent: [0, 0, 0.5, 0, 0] },
+      { t: 'in', tick: 3, intent: [0, 0, 0, 0, 8] },
+      { t: 'in', tick: 3, intent: [0, 0, 0, 0, -1] },
+      { t: 'in', tick: 3, intent: [0, 0, 0, '0', 0] },
+      { t: 'in', tick: 3, intent: { 0: 0, 1: 0, 2: 0, 3: 0, 4: 0, length: 5 } },
+    ];
+    for (const msg of bad) expect(isIn(msg), JSON.stringify(msg)).toBe(false);
   });
 });

@@ -49,7 +49,7 @@ export function disconnect(s: Seats, side: SideIndex, now: number): Seats {
 
 /**
  * Ends every grace period that ran out by `now`. Before the start, a Guest's seat is freed and a Host's closes
- * the Court. After it, the seat is `gone`.
+ * the Court. After it, the seat is `gone`, and the Court closes once both are.
  */
 export function expire(s: Seats, now: number): Seats {
   let next = s;
@@ -60,6 +60,7 @@ export function expire(s: Seats, now: number): Seats {
     else if (side === 1) next = withSeat(next, 1, null);
     else return { seats: [null, null], started: false, closed: true };
   }
+  if (next.started && next.seats.every((seat) => seat?.status === 'gone')) return { ...next, closed: true };
   return next;
 }
 

@@ -127,6 +127,15 @@ describe('Court seats', () => {
     }
   });
 
+  it('closes the Court once both Players are gone', () => {
+    const started = start(full());
+    const one = expire(disconnect(started, 0, T0), T0 + GRACE_MS);
+    expect(one.closed).toBe(false);
+    const both = expire(disconnect(one, 1, T0 + 1_000), T0 + 1_000 + GRACE_MS);
+    expect(both.closed).toBe(true);
+    expect(nextExpiry(both)).toBeNull();
+  });
+
   it('reports the earliest grace end to schedule the timer', () => {
     const both = disconnect(disconnect(full(), 1, T0 + 2_000), 0, T0 + 1_000);
     expect(nextExpiry(both)).toBe(T0 + 1_000 + GRACE_MS);
