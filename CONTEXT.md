@@ -29,7 +29,7 @@ The physical playing area. For the online room, see **Court** under Online play.
 
 ### Shots and input
 
-- **Intent**: one tick of player input: `{ move, shot, aim }`. Humans, Bots and future network clients all produce Intents. Nothing else enters the **Sim**.
+- **Intent**: one tick of player input: `{ move, shot, aim }`. Humans, Bots and future network clients all produce Intents. Nothing else enters the **Sim**. Online, a `reported` Side's Intent may also carry a `contact` flag marking its Contact Tick (see **Reported Contact**).
 - **Shot type**: one of **Soft**, **Drive**, **Lob**. These are the only three shot buttons.
   - **Soft**: lands in or near the Kitchen. From the Kitchen line it is a **Dink**; from deep it is a **Drop**; against a very fast incoming ball it becomes a **Block**.
   - **Drive**: flat and fast. Against a high ball it becomes a **Smash**.

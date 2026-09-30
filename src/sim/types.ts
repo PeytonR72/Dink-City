@@ -49,6 +49,8 @@ export interface Intent {
   aim: Vec2;
   /** Shot button pressed this Tick, if any. */
   shot: ShotType | null;
+  /** This Tick is the Player's Contact (online, `reported` Sides only). See Reported Contact in CONTEXT.md. */
+  contact?: boolean;
 }
 
 export interface Commit {
@@ -130,12 +132,20 @@ export type SimEvent =
   | { kind: 'game'; winner: SideIndex }
   | { kind: 'match'; winner: SideIndex };
 
+/**
+ * How the Sim finds a Side's Contact. `auto`: at the ball's closest point to the sweet spot, or before it leaves
+ * reach. `reported`: only on a Tick whose Intent carries `contact`, if reach and the rules allow it (online).
+ */
+export type ContactMode = 'auto' | 'reported';
+
 /** Match rules. Part of the Sim state, not Tuning, because they change the rules rather than the feel. */
 export interface MatchConfig {
   pointsToWin: number;
   winBy: number;
   rallyScoring: boolean;
   bestOf: 1 | 3;
+  /** By Side. Absent means both `auto`. Fixed for the whole Match. */
+  contactMode?: [ContactMode, ContactMode];
 }
 
 export interface Match {

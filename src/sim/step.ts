@@ -15,6 +15,7 @@ import { nextRandom } from './rng';
 import { TICK, netClearance, simulateFlight, solveShot, solveTimedShot } from './solver';
 import type {
   Commit,
+  ContactMode,
   DeadReason,
   End,
   Match,
@@ -39,6 +40,13 @@ const BASELINE_OFFSET = 0.3;
 const FAR = 10;
 
 export const DEFAULT_MATCH: MatchConfig = { pointsToWin: 11, winBy: 2, rallyScoring: false, bestOf: 1 };
+
+/**
+ * How far past reach, in meters, a reported Contact still counts (as a hit at the edge of reach). Covers float
+ * drift between the hitter's browser and the Court, since `Math.hypot` and friends aren't bit-identical across
+ * engines.
+ */
+export const REACH_SLACK = 0.05;
 
 /** The End a Side is playing from in the current Game. */
 export function endOf(s: SimState, side: SideIndex): End {
@@ -123,6 +131,17 @@ export function step(prev: SimState, intents: readonly [Intent, Intent], t: SimT
   return s;
 }
 
+/**
+ * Would the `auto` Contact rule make `side` hit on this step with these Intents? For a `reported` Side played by a
+ * Bot (the Takeover Bot), which sets its `contact` from this. Read-only, and slower than a step.
+ */
+export function autoContact(s: SimState, intents: readonly [Intent, Intent], side: SideIndex, t: SimTuning): boolean {
+  const modes: [ContactMode, ContactMode] = [contactModeOf(s, 0), contactModeOf(s, 1)];
+  modes[side] = 'auto';
+  const probe = { ...s, match: { ...s.match, config: { ...s.match.config, contactMode: modes } } };
+  return step(probe, intents, t).events.some((e) => e.kind === 'hit' && e.side === side && e.variant !== 'serve');
+}
+
 function press(s: SimState, i: SideIndex, shot: ShotType, intent: Intent, t: SimTuning) {
   const player = s.sides[i].players[0];
   if (s.phase === 'serve') {
@@ -150,6 +169,11 @@ function serve(s: SimState, i: SideIndex, shot: ShotType, intent: Intent, t: Sim
   s.phaseTick = s.tick;
 }
 
+/** A Side's Contact mode: `auto` unless the Match says otherwise. */
+function contactModeOf(s: SimState, side: SideIndex): ContactMode {
+  return s.match.config.contactMode?.[side] ?? 'auto';
+}
+
 function checkContact(s: SimState, intents: readonly [Intent, Intent], t: SimTuning, random: () => number) {
   const { ball } = s;
   for (const i of [0, 1] as const) {
@@ -160,17 +184,22 @@ function checkContact(s: SimState, intents: readonly [Intent, Intent], t: SimTun
       player.commit.bestDistance = null;
       continue;
     }
-    const d = sweetSpotDistance(player, end, ball.pos, t);
-    if (d === null) continue;
-
-    // Wait for the ball to reach its closest point to the sweet spot, but
-    // never let it leave reach unhit.
-    const next = { x: ball.pos.x + ball.vel.x * TICK, y: ball.pos.y + ball.vel.y * TICK, z: ball.pos.z + ball.vel.z * TICK };
-    const leaving = sweetSpotDistance(player, end, next, t) === null;
-    const best = player.commit.bestDistance;
-    if (d > t.sweetRadius && !leaving && (best === null || d < best)) {
-      player.commit.bestDistance = d;
-      continue;
+    // A reported Side keeps the same bookkeeping as `auto`; only the moment of the hit differs.
+    const reported = contactModeOf(s, i) === 'reported';
+    const contact = reported && intents[i].contact === true;
+    let d = sweetSpotDistance(player, end, ball.pos, t);
+    if (d === null) {
+      if (!contact || sweetSpotDistance(player, end, ball.pos, t, REACH_SLACK) === null) continue;
+      d = 1;
+    } else {
+      // Wait for the ball to reach its closest point to the sweet spot, but
+      // never let it leave reach unhit.
+      const next = { x: ball.pos.x + ball.vel.x * TICK, y: ball.pos.y + ball.vel.y * TICK, z: ball.pos.z + ball.vel.z * TICK };
+      const leaving = sweetSpotDistance(player, end, next, t) === null;
+      const best = player.commit.bestDistance;
+      const wait = d > t.sweetRadius && !leaving && (best === null || d < best);
+      if (wait) player.commit.bestDistance = d;
+      if (reported ? !contact : wait) continue;
     }
 
     const volley = ball.bouncesSinceHit === 0;
@@ -190,12 +219,13 @@ function inKitchen(player: Player, t: SimTuning): boolean {
 
 /**
  * Normalized distance (0 = sweet spot, 1 = edge of reach) from the Player's
- * sweet spot to a ball position, or null when out of reach.
+ * sweet spot to a ball position, or null when out of reach. `slack` meters
+ * widen reach in every direction.
  */
-export function sweetSpotDistance(player: Player, end: End, pos: Vec3, t: SimTuning): number | null {
-  if (pos.y > t.reachHeight) return null;
+export function sweetSpotDistance(player: Player, end: End, pos: Vec3, t: SimTuning, slack = 0): number | null {
+  if (pos.y > t.reachHeight + slack) return null;
   const l = worldToLocal(end, pos.x - player.pos.x, pos.z - player.pos.z);
-  if (Math.hypot(l.x / t.reachSide, l.y / (l.y >= 0 ? t.reachForward : t.reachBack)) > 1) return null;
+  if (Math.hypot(l.x / (t.reachSide + slack), l.y / ((l.y >= 0 ? t.reachForward : t.reachBack) + slack)) > 1) return null;
   const dx = (l.x - t.sweetSpotSide) / t.reachSide;
   const dy =
     l.y >= t.sweetSpotForward
