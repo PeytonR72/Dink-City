@@ -2,6 +2,10 @@
 // use the panel's Export button and paste the result back into this file.
 import type { SimTuning } from './sim/types';
 
+/**
+ * Online Matches run the build's `simTuning`, checked by `simHash` in the handshake (src/net/). Live `?debug`
+ * edits change the hash, so an edited client is refused online on purpose.
+ */
 export const simTuning: SimTuning = {
   gravity: 9.81,
   drag: 0.033,

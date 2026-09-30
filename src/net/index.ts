@@ -1,0 +1,7 @@
+// Pure helpers shared by the client and the online server (party/). They import only the Sim, so the Worker can
+// bundle them: no DOM, no three.js, no wall clock, and no randomness outside the Sim's seeded rng.
+export * from './intentCodec';
+export * from './name';
+export * from './presets';
+export * from './simHash';
+export * from './snapshot';
