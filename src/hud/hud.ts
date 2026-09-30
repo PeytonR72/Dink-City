@@ -60,6 +60,11 @@ export class Hud {
     this.practice = root.querySelector('#practice')!;
   }
 
+  /** The Side this screen belongs to, shown as YOU. */
+  setLocal(side: SideIndex) {
+    this.local = side;
+  }
+
   /** Local Player's row first. */
   private order(): [SideIndex, SideIndex] {
     return this.local === 0 ? [0, 1] : [1, 0];

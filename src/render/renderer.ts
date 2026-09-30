@@ -4,7 +4,6 @@ import {
   BALL_RADIUS,
   TICK,
   endOf,
-  other,
   predictContact,
   predictLanding,
   worldToLocal,
@@ -19,6 +18,7 @@ import {
 import type { ViewTuning } from '../tuning';
 import { VENUES, type Venue } from '../venue/venues';
 import { Character } from './character';
+import { localView } from './localView';
 import { DEFAULT_PLAYER_COLORS, type Models, type PlayerColors } from './models';
 
 const COLORS = {
@@ -29,8 +29,6 @@ const COLORS = {
   landing: 0xffd23f,
 };
 
-/** The Side this screen belongs to. */
-const LOCAL_SIDE = 0;
 const TRAIL_MAX = 16;
 
 interface PlayerView {
@@ -65,6 +63,8 @@ export class Renderer {
   private machine: THREE.Object3D;
   private machineOn = false;
   private cameraX = 0;
+  /** The Side this screen belongs to. */
+  private localSide: SideIndex = 0;
   private hemi = new THREE.HemisphereLight();
   private sun = new THREE.DirectionalLight();
   private venue: Venue = VENUES.park;
@@ -154,6 +154,11 @@ export class Renderer {
     this.players[side].character.setColors(colors);
   }
 
+  /** The Side this screen belongs to: drawn at the bottom, followed by the camera, with the Commit ring. */
+  setLocalSide(side: SideIndex) {
+    this.localSide = side;
+  }
+
   /** A cut to another moment (into or out of a Replay): drops the ball trail, which would streak across the jump. */
   cut() {
     this.trailPoints = [];
@@ -171,8 +176,8 @@ export class Renderer {
   render(prev: SimState, curr: SimState, alpha: number, dt: number) {
     const v = this.view;
     this.applyLighting();
-    const mirrored = endOf(curr, LOCAL_SIDE) === 1;
-    this.world.rotation.y = mirrored ? Math.PI : 0;
+    const view = localView(curr, this.localSide);
+    this.world.rotation.y = view.mirrored ? Math.PI : 0;
     const ballPos = lerpVec(prev.ball.pos, curr.ball.pos, alpha);
     this.ball.position.set(ballPos.x, ballPos.y, ballPos.z);
     this.ball.scale.setScalar(v.ballScale);
@@ -184,7 +189,7 @@ export class Renderer {
     (this.ballShadow.material as THREE.MeshBasicMaterial).opacity = 0.55 * (1 - k * 0.75);
 
     this.updateTrail(curr, ballPos);
-    this.updateLanding(curr, dt);
+    this.updateLanding(curr, view.landingFrom, dt);
 
     for (const i of [0, 1] as const) {
       const prevPlayer = prev.sides[i].players[0];
@@ -199,7 +204,7 @@ export class Renderer {
       if (i === 1 && this.machineOn) this.placeMachine(p, end, pv, curr.tick + alpha);
 
       pv.ring.position.set(p.x, 0.006, p.z);
-      pv.ring.visible = i === LOCAL_SIDE && player.commit !== null;
+      pv.ring.visible = i === view.ring && player.commit !== null;
       const ringMat = pv.ring.material as THREE.MeshBasicMaterial;
       ringMat.color.setHex(player.aiming ? COLORS.aim : COLORS.line);
       ringMat.opacity = player.aiming ? 0.95 : 0.4;
@@ -207,10 +212,8 @@ export class Renderer {
 
     for (const hook of this.hooks) hook(prev, curr, alpha);
 
-    const local = curr.sides[LOCAL_SIDE].players[0].pos;
-    const screenX = mirrored ? -local.x : local.x;
     const followK = 1 - Math.exp(-v.cameraDamping * dt);
-    this.cameraX += (screenX * v.cameraFollowX - this.cameraX) * followK;
+    this.cameraX += (view.followX * v.cameraFollowX - this.cameraX) * followK;
     if (this.camera.fov !== v.fov) {
       this.camera.fov = v.fov;
       this.camera.updateProjectionMatrix();
@@ -282,9 +285,9 @@ export class Renderer {
   }
 
   /** Marks where the opponent's shot (or Serve) will land. */
-  private updateLanding(curr: SimState, dt: number) {
+  private updateLanding(curr: SimState, from: SideIndex, dt: number) {
     const { ball } = curr;
-    const incoming = curr.phase === 'rally' && ball.lastHitBy === other(LOCAL_SIDE) && ball.bouncesSinceHit === 0;
+    const incoming = curr.phase === 'rally' && ball.lastHitBy === from && ball.bouncesSinceHit === 0;
     if (!incoming) {
       this.landing.visible = false;
       return;

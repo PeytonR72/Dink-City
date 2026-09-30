@@ -41,6 +41,7 @@ const failed = (e: unknown): never => {
 };
 const models = await loadModels().catch(failed);
 const renderer = new Renderer(canvas, viewTuning, simTuning, models);
+renderer.setLocalSide(LOCAL);
 renderer.setColors(LOCAL, colors);
 const input = new Input();
 const hud = new Hud(document.querySelector('#hud')!, LOCAL);
@@ -56,6 +57,7 @@ async function showVenue(id: VenueId) {
   const surroundings = await loadSurroundings(VENUE_ASSETS[id].model);
   venue = id;
   renderer.setVenue(VENUES[id], surroundings);
+  // Side 1 is the offline Bot; online Matches will color it differently.
   renderer.setColors(1, { ...DEFAULT_PLAYER_COLORS, ...VENUES[id].bot });
   void setAmbience(VENUE_ASSETS[id].ambience, viewTuning);
 }

@@ -63,6 +63,7 @@ export function createOverlays(renderer: Renderer, sim: SimTuning, getBot: () =>
     }
 
     const bot = getBot().plan;
+    // Side 1 is the offline Bot; these overlays are offline-only for now.
     const me = curr.sides[1].players[0].pos;
     botPath.visible = bot.spot !== null;
     if (bot.spot) botPath.geometry.setFromPoints([new THREE.Vector3(me.x, 0.02, me.z), new THREE.Vector3(bot.spot.x, 0.02, bot.spot.z)]);
