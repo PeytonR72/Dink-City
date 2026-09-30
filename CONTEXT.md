@@ -15,6 +15,8 @@ A browser-based 3D pickleball game. Singles against **Bots** in v1, with the mod
 
 ### Court
 
+The physical playing area. For the online room, see **Court** under Online play.
+
 - **Kitchen**: the non-volley zone, 2.13 m deep on each side of the net. Avoid "NVZ" in code and UI.
 - **Kitchen line**: the kitchen's far edge.
 - **Service court**: left or right half of the area behind the Kitchen. Serves go diagonally.
@@ -58,4 +60,18 @@ A browser-based 3D pickleball game. Singles against **Bots** in v1, with the mod
 - **Dink City**: the themed map menu.
 - **Venue**: a location on the map (e.g. Park, Rooftop, Beach). Each Venue has its own surroundings, ambience and Bot Personality. Venues unlock in order.
 - **Practice mode**: a ball machine on Side 1 that feeds shots through the same Intent interface, with step-by-step prompts (return of serve, third shot, volley, dink, free play). Each **rep** is a fresh Rally with no score; three good reps pass a step.
-- **Fault Replay**: the last seconds before a Fault, re-stepped from the recorded Rally's start state and Intents, shown slowed under the Fault banner. Presentation only; it never feeds back into the Match.
+- **Fault Replay**: the last seconds before a Fault, re-stepped from the recorded Rally's start state and Intents, shown slowed under the Fault banner. Presentation only; it never feeds back into the Match. Offline only in v1 (ADR-0004).
+
+### Online play (see ADR-0004)
+
+- **Court**: an online room hosting one Match between two Players: one Durable Object, named by its **Court code** (also shared as a `?court=` link). The Court runs the authoritative Sim. The name is reserved for the room, not how it was found, so a future open world could reuse Courts.
+- **Lobby**: the directory of open Courts, one singleton that menu clients watch live. Courts report to it; an entry a Court stops reporting expires on its own. A Court leaves the list once it's full.
+- **Host**: the Player who created a Court and picked its Preset. **Guest**: the Player who joined it.
+- **Preset**: a Court's fixed rules, picked at creation: **Quick** (1 Game, Rally scoring), **Standard** (1 Game, Side-out scoring) or **Long** (best of 3, Side-out scoring).
+- **Display name**: a guest name kept on the client and validated by the server. There are no accounts.
+- **Snapshot**: the Court's full `SimState`, sent 30 times a second.
+- **Predicted timeline**: a client's own run of the Sim, ahead of the Court, for its own Player and the ball. It is reconciled on every Snapshot.
+- **Interpolated timeline**: Snapshots drawn a little in the past, used for the remote Player.
+- **Reported Contact**: online, a human Player's client flags the Tick of Contact in its Intent (`contact`), and the Court checks reach and the rules before the Sim computes the shot. Offline, the Sim finds Contact itself (`contactMode: 'auto'`).
+- **Rewind window**: how far back (15 Ticks) the Court re-simulates for a late Intent or Contact report.
+- **Takeover Bot**: a Bot that plays a disconnected Player's Side, inside the Court, once their grace period runs out. On a Rewind its logged Intents are replayed, never re-thought.
