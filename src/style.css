@@ -191,6 +191,8 @@ body {
 }
 
 body[data-mode='menu'] #hud,
+body[data-mode='lobby'] #hud,
+body[data-mode='waiting'] #hud,
 body[data-mode='paused'] #scoreboard {
   display: none;
 }
@@ -500,4 +502,197 @@ body[data-practice='true'] #scoreboard {
   font-size: 20px;
   letter-spacing: 0.15em;
   color: #ffd23f;
+}
+
+/* The Online panel: the name, Create and Join on one side, the live Court list on the other; or the wait. */
+.online-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 20px;
+  align-items: flex-start;
+  justify-content: center;
+  max-width: 900px;
+  width: 100%;
+}
+
+.online-side,
+.online-courts {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 18px;
+  border-radius: 14px;
+  background: rgba(20, 30, 50, 0.5);
+}
+
+.online-courts {
+  flex: 1 1 320px;
+  max-width: 440px;
+  align-items: stretch;
+}
+
+.overlay .online-side h2,
+.overlay .online-courts h2 {
+  margin: 6px 0 0;
+  text-align: center;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-weight: 800;
+}
+
+.overlay input[type='text'] {
+  width: 220px;
+  box-sizing: border-box;
+  padding: 8px 12px;
+  border: 3px solid #1d2433;
+  border-radius: 10px;
+  font: inherit;
+  font-size: 18px;
+  font-weight: 700;
+  color: #1d2433;
+}
+
+.overlay input[aria-invalid='true'] {
+  border-color: #d7263d;
+}
+
+.field-problem,
+.online-message {
+  min-height: 1.3em;
+  margin: 0;
+  font-weight: 700;
+  color: #ffd23f;
+  text-align: center;
+}
+
+.join-code {
+  display: flex;
+  gap: 8px;
+}
+
+.overlay .join-code input {
+  width: 130px;
+  text-transform: uppercase;
+}
+
+.overlay .join-code button {
+  min-width: 0;
+}
+
+.overlay button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.court-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 44vh;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.overlay .court-row {
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+  width: 100%;
+  min-width: 0;
+  padding: 8px 14px;
+  font-size: 18px;
+  text-align: left;
+}
+
+.court-host {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.court-preset,
+.court-players {
+  font-size: 15px;
+}
+
+.court-empty {
+  margin: 0;
+  text-align: center;
+  font-weight: 700;
+}
+
+.court-empty:empty {
+  display: none;
+}
+
+.online-waiting {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+#lobby[data-view='list'] .online-waiting,
+#lobby[data-view='waiting'] .online-list,
+#lobby[data-view='waiting'] .online-message,
+#lobby[data-view='waiting'] #online-back {
+  display: none;
+}
+
+.online-code {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 800;
+}
+
+.online-code strong {
+  font-size: 34px;
+  letter-spacing: 0.12em;
+  color: #ffd23f;
+}
+
+.wait-status {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.online-link {
+  display: flex;
+  gap: 8px;
+}
+
+.overlay .online-link input {
+  width: min(360px, 60vw);
+  font-size: 15px;
+}
+
+.overlay .online-link button {
+  min-width: 0;
+}
+
+.online-code[hidden],
+.online-link[hidden] {
+  display: none;
+}
+
+/* After an online Match: just the way back, under the result banner. */
+#online-over {
+  inset: auto 0 12% 0;
+  padding: 0;
+  background: none;
+  pointer-events: none;
+}
+
+#online-over button {
+  pointer-events: auto;
 }

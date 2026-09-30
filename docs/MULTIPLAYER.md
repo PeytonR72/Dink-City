@@ -1,6 +1,6 @@
 # Online multiplayer: architecture audit and plan
 
-Status: approved (2026-09-29). Phases 0 (ADR-0004 and glossary) and 1 (client groundwork) are done. Phase 2 has not started.
+Status: approved (2026-09-29). Phases 0 (ADR-0004 and glossary), 1 (client groundwork) and 2 (Court, Lobby, and naive online play; done 2026-09-30) are done.
 
 Goal: 1v1 online Matches, found through a public list of **Courts** or joined by code or link. The server owns the Sim and runs it at a fixed Tick. Each client predicts its own Player and interpolates the remote Player. The hitter's client reports each hit, and the server validates it. Single-player against a Bot, and Practice mode, keep working at every phase.
 
@@ -328,10 +328,11 @@ Done 2026-09-29 (`.scratch/multiplayer/issues/01-client-groundwork.md`). One dev
 
 Exit: no visible change, and the new tests are green.
 
-### Phase 2: Court, Lobby, and naive online play
+### Phase 2: Court, Lobby, and naive online play ✅
 
 Issues: `.scratch/multiplayer/issues/` 02 (Court and handshake), 03 (the Court runs the Match), 04 (`OnlineMatch`), 05 (Lobby), 06 (the menu's Online panel).
 
+Done 2026-09-30. The exit criteria were checked with Playwright browser contexts on `wrangler dev` and `vite dev` (issue 06's comment). One deviation: "killing the Court process" was shown with the Lobby's shortened TTL (`LOBBY_TTL_MS`), since `wrangler dev` can't kill one Court.
 
 **Server (`party/`, mirroring PokerElo):**
 

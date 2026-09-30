@@ -1,6 +1,5 @@
 import { getServerByName, routePartykitRequest } from 'partyserver';
-import { isPresetId, validateDisplayName } from '../../src/net';
-import { makeCourtCode, isCourtCode } from './courtCode';
+import { isCourtCode, isPresetId, makeCourtCode, validateDisplayName } from '../../src/net';
 import type { Env } from './env';
 import { LOBBY_NAME } from './lobby';
 import { isAllowedOrigin } from './origin';

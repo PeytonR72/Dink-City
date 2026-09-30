@@ -1,6 +1,6 @@
-// The browser's end of a Court: the WebSocket, the handshake and the rejoin token. The only online code that
-// touches the DOM or sockets; everything it carries is defined in `src/net/`.
-import { PROTOCOL_VERSION, decode, encode, isCourtMsg, simHash, type ClientMsg, type CourtMsg, type PresetId } from '../net';
+// The browser's end of a Court and of the Lobby: the WebSockets, the handshake and the rejoin token. The only
+// online code with sockets or the token; everything it carries is defined in `src/net/`.
+import { PROTOCOL_VERSION, decode, encode, isCourtMsg, isLobbyMsg, simHash, type ClientMsg, type CourtMsg, type LobbyCourt, type PresetId } from '../net';
 import { simTuning } from '../tuning';
 
 /** Where the Worker runs: `wrangler dev` unless the build says otherwise (issue 16 sets production's). */
@@ -29,7 +29,10 @@ function saveToken(code: string, token: string) {
   } catch {}
 }
 
-/** Creates a Court with this Player as its Host, and keeps the Host token for the hello. Returns its code. */
+/**
+ * Creates a Court with this Player as its Host, and keeps the Host token for the hello. Returns its code. Throws
+ * with the Worker's error code (`bad_name`…) as the message, or the browser's own error if it can't be reached.
+ */
 export async function createCourt(name: string, preset: PresetId): Promise<string> {
   const res = await fetch(url('http', '/create'), {
     method: 'POST',
@@ -44,6 +47,8 @@ export async function createCourt(name: string, preset: PresetId): Promise<strin
 
 export interface CourtLink {
   send(msg: ClientMsg): void;
+  /** Leaves the Court. `onClose` isn't called. */
+  close(): void;
 }
 
 /**
@@ -65,10 +70,48 @@ export function joinCourt(
     if (msg.t === 'welcome') saveToken(code, msg.token);
     handlers.onMessage(msg);
   });
-  ws.addEventListener('close', (e) => handlers.onClose(e.code, e.reason));
+  let closed = false;
+  ws.addEventListener('close', (e) => {
+    if (!closed) handlers.onClose(e.code, e.reason);
+  });
   return {
     send(msg) {
       if (ws.readyState === WebSocket.OPEN) ws.send(encode(msg));
     },
+    close() {
+      closed = true;
+      ws.close();
+    },
+  };
+}
+
+/** Waits this long before reconnecting to the Lobby after its socket drops. */
+const LOBBY_RETRY_MS = 3000;
+
+/**
+ * Subscribes to the Lobby's list of open Courts: `onCourts` gets every list it pushes, and null while it can't be
+ * reached (it retries every few seconds). Returns the unsubscribe, which closes the socket.
+ */
+export function watchLobby(onCourts: (courts: LobbyCourt[] | null) => void): () => void {
+  let ws: WebSocket;
+  let retry: ReturnType<typeof setTimeout> | undefined;
+  let stopped = false;
+  const connect = () => {
+    ws = new WebSocket(url('ws', '/parties/lobby/global'));
+    ws.addEventListener('message', (e) => {
+      const msg = typeof e.data === 'string' ? decode(e.data) : null;
+      if (isLobbyMsg(msg)) onCourts(msg.courts);
+    });
+    ws.addEventListener('close', () => {
+      if (stopped) return;
+      onCourts(null);
+      retry = setTimeout(connect, LOBBY_RETRY_MS);
+    });
+  };
+  connect();
+  return () => {
+    stopped = true;
+    clearTimeout(retry);
+    ws.close();
   };
 }

@@ -26,3 +26,9 @@ const CODE = new RegExp(`^[${COURT_CODE_ALPHABET}]{${COURT_CODE_LENGTH}}$`);
 export function isCourtCode(v: unknown): v is string {
   return typeof v === 'string' && CODE.test(v);
 }
+
+/** The code in what a Player typed or pasted: the code itself in any case, or a link with `court=CODE`. */
+export function readCourtCode(raw: string): string | null {
+  const code = (/[?&]court=([^&#]*)/.exec(raw)?.[1] ?? raw).trim().toUpperCase();
+  return isCourtCode(code) ? code : null;
+}

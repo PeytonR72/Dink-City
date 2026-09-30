@@ -5,16 +5,19 @@ import { PERSONALITY, type PersonalityName } from './bot/personality';
 import { Hud } from './hud/hud';
 import { Input } from './input/input';
 import type { MatchDriver, MatchView } from './match/driver';
-import type { OnlineMatch } from './match/online';
 import { LocalMatch } from './match/local';
 import { Locker } from './menu/locker';
 import { CityMap } from './menu/map';
 import { Overlay, SettingsPanel } from './menu/menu';
-import { COURT_CLOSE, DEFAULT_PRESET, PRESETS, isPresetId, validateDisplayName, type CourtErrorCode } from './net';
+import { OnlinePanel } from './menu/online';
+import { COURT_CLOSE, PRESETS, readCourtCode, type CourtErrorCode, type PresetId } from './net';
+import type { CourtLink } from './online/connection';
+import { onlineOffered } from './online/gate';
 import { PRACTICE_STEPS, Practice, REPS_TO_PASS, createMachine } from './practice/practice';
 import { DEFAULT_PLAYER_COLORS, loadModels, loadSurroundings } from './render/models';
 import { Renderer } from './render/renderer';
 import { loadColors, saveColors } from './save/colors';
+import { guestName, loadName, saveName } from './save/name';
 import { isUnlocked, loadProgress, recordWin, saveProgress } from './save/progress';
 import { loadSettings, saveSettings, withFlags, type Settings } from './save/settings';
 import { browserStore } from './save/store';
@@ -29,14 +32,16 @@ const STILL: Intent = { move: { x: 0, y: 0 }, aim: { x: 0, y: 0 }, shot: null };
 // Flags for playtesting override the saved Settings: ?rally, ?bo3, ?bot=easy|medium|hard, ?sunset.
 // ?play skips the menu and starts a Match; ?venue=park|rooftop|beach picks its Venue, locked or not.
 // ?personality=dinker|banger|lobber overrides the Venue Bot's Personality. ?practice starts Practice mode.
-// In dev only, until the menu's online panel (issue 06): ?host=quick|standard|long&name=Ana creates a Court and
-// joins it, and ?court=CODE&name=Ana joins one.
+// ?court=CODE joins that Court (it's the link a Host shares), asking for a Display name first if none is saved.
 const params = new URLSearchParams(location.search);
 const store = browserStore();
 let saved = loadSettings(store);
 const settings = (): Settings => withFlags(saved, params);
 let progress = loadProgress(store);
 let colors = loadColors(store);
+/** The Display name for online play, once one has been used or typed. */
+let displayName = loadName(store);
+const ONLINE = onlineOffered(import.meta.env);
 
 const canvas = document.querySelector<HTMLCanvasElement>('#game')!;
 const failed = (e: unknown): never => {
@@ -113,13 +118,16 @@ async function showVenue(id: VenueId) {
   void setAmbience(VENUE_ASSETS[id].ambience, viewTuning);
 }
 
-/** `online` covers joining a Court, waiting for its Match, and being disconnected from it. */
 /** The colors of `id`'s Bot. */
 function botColors(id: VenueId) {
   return { ...DEFAULT_PLAYER_COLORS, ...VENUES[id].bot };
 }
 
-type Mode = 'menu' | 'locker' | 'match' | 'paused' | 'online';
+/**
+ * `lobby` is the Online panel's list, `waiting` its wait for a Court's Match to start, and `online` the notice of an
+ * online Match that was cut off.
+ */
+type Mode = 'menu' | 'locker' | 'match' | 'paused' | 'lobby' | 'waiting' | 'online';
 let mode: Mode = 'menu';
 
 const menu = new Overlay(
@@ -145,6 +153,21 @@ menu.el.querySelector('#open-locker')!.before(
 );
 menu.on('#open-locker', () => setMode('locker'));
 menu.on('#open-practice', () => startPractice());
+if (ONLINE) {
+  menu.el.querySelector('#open-practice')!.insertAdjacentHTML('beforebegin', '<button id="open-online" class="primary">Play online</button>');
+  menu.on('#open-online', () => void openLobby());
+}
+
+const onlinePanel = new OnlinePanel(displayName ?? guestName(), {
+  name: useName,
+  create: (preset, name) => void goOnline(name, { preset }),
+  join: (code, name) => void goOnline(name, { code }),
+  cancel() {
+    leaveCourt();
+    void openLobby();
+  },
+  back: () => setMode('menu'),
+});
 
 const locker = new Locker(
   models.player,
@@ -173,6 +196,9 @@ const onlineStatus = new Overlay(
   <button id="leave">Leave</button>`,
 );
 onlineStatus.on('#leave', () => quitToMenu());
+
+const onlineOver = new Overlay('online-over', '<button id="back-to-map" class="primary">Back to map</button>');
+onlineOver.on('#back-to-map', () => quitToMenu());
 
 /** The Difficulty of the Match in play, for its star. */
 let difficulty = settings().difficulty;
@@ -240,50 +266,102 @@ const COURT_ERRORS: Record<CourtErrorCode, string> = {
   full: 'That Court is full.',
   not_found: 'There is no Court with that code.',
   bad_name: 'That Display name is not allowed.',
-  version: 'This game is out of date. Reload to update it.',
+  version: 'Please reload for the latest version.',
   bad_message: 'The Court did not understand this game.',
   host_left: 'The host left.',
 };
 
-/**
- * Joins the Court in `?court=`, or creates one with the Preset in `?host=` first, then plays its Match as the
- * Display name in `?name=`. The Hud, renderer and colors follow the seat the Court gives.
- */
-async function goOnline() {
-  const status = (text: string) => {
-    onlineStatus.el.querySelector('.online-status')!.textContent = text;
-    setMode('online');
-  };
-  status('Connecting…');
-  const name = validateDisplayName(params.get('name') ?? 'Player');
-  if (!name.ok) return status(COURT_ERRORS.bad_name);
-  const [{ createCourt, joinCourt }, { OnlineMatch: Online }] = await Promise.all([import('./online/connection'), import('./match/online')]);
+/** Unsubscribes from the Lobby's list, while the Online panel shows it. */
+let stopLobby: (() => void) | null = null;
 
-  let code = params.get('court')?.toUpperCase() ?? '';
-  if (code === '') {
-    const preset = params.get('host');
-    try {
-      code = await createCourt(name.name, isPresetId(preset) ? preset : DEFAULT_PRESET);
-    } catch (e) {
-      return status(`Could not create a Court: ${(e as Error).message}`);
+/** The Online panel's list, with the Lobby's Courts live. `message` and `code` are as in `OnlinePanel.showList`. */
+async function openLobby(message = '', code = '') {
+  setMode('lobby');
+  onlinePanel.showList(message, code);
+  onlinePanel.setCourts(null);
+  const { watchLobby } = await import('./online/connection');
+  if (mode === 'lobby' && !stopLobby) stopLobby = watchLobby((courts) => onlinePanel.setCourts(courts));
+}
+
+/** The Court this screen is in, before and during its Match. */
+let court: CourtLink | null = null;
+/** Counts attempts to go online, so one that was cancelled while it waited on the network stops there. */
+let attempt = 0;
+
+/** Saves the Display name this Player typed or played under. */
+function useName(name: string) {
+  displayName = name;
+  saveName(store, name);
+}
+
+/** Puts the Court's code in the URL, so a reload rejoins it in the same seat, or takes it out (null). */
+function showCourtInUrl(code: string | null) {
+  if (code) params.set('court', code);
+  else params.delete('court');
+  history.replaceState(null, '', params.size ? `?${params}` : location.pathname);
+}
+
+/** Leaves the Court before its Match starts. Its seat token stays, so its link still rejoins the same seat. */
+function leaveCourt() {
+  attempt++;
+  court?.close();
+  court = null;
+  showCourtInUrl(null);
+}
+
+/**
+ * Creates a Court with `preset` and joins it as its Host, or joins the Court `code`, as `name`, then waits for its
+ * Match and plays it. The Hud, renderer and colors follow the seat the Court gives.
+ */
+async function goOnline(name: string, target: { preset: PresetId } | { code: string }) {
+  const mine = ++attempt;
+  useName(name);
+  setMode('waiting');
+  onlinePanel.showWaiting('Connecting…');
+  // Before the start, anything that goes wrong returns to the list and says why; after it, the Match stays on screen.
+  const fail = (text: string) => {
+    if (match !== offline) {
+      onlineStatus.el.querySelector('.online-status')!.textContent = text;
+      return setMode('online');
     }
-    // A reload rejoins this Court as its Host.
-    params.delete('host');
-    params.set('court', code);
-    history.replaceState(null, '', `?${params}`);
+    leaveCourt();
+    void openLobby(text);
+  };
+  const [{ createCourt, joinCourt }, { OnlineMatch }] = await Promise.all([import('./online/connection'), import('./match/online')]);
+  if (mine !== attempt) return;
+
+  let code: string;
+  if ('code' in target) code = target.code;
+  else {
+    try {
+      code = await createCourt(name, target.preset);
+    } catch (e) {
+      if (mine !== attempt) return;
+      const reason = (e as Error).message;
+      return fail(
+        reason === 'bad_name'
+          ? COURT_ERRORS.bad_name
+          : e instanceof TypeError
+            ? 'Could not reach the server. Try again in a moment.'
+            : `Could not create a Court (${reason}).`,
+      );
+    }
+    if (mine !== attempt) return;
   }
+  showCourtInUrl(code);
 
   let side: SideIndex = 0;
-  let online: OnlineMatch | null = null;
-  const link = joinCourt(code, name.name, {
+  let online: InstanceType<typeof OnlineMatch> | null = null;
+  const link = joinCourt(code, name, {
     onMessage(msg) {
       if (msg.t === 'welcome') {
         side = msg.side;
-        status(`Court ${code}. Waiting for the Match to start…`);
-        // The Venue is on show already.
+        // The Host shares the code and link; a Guest's opponent is already here, and the Match starts in a moment.
+        onlinePanel.showWaiting('Waiting for opponent…', side === 0 ? code : null);
+        // The Venue on show is loaded already. It isn't part of the Preset: each screen shows its own.
         link.send({ t: 'ready' });
       } else if (msg.t === 'start') {
-        online = new Online({
+        online = new OnlineMatch({
           local: side,
           start: createInitialState(msg.seed, PRESETS[msg.preset].config),
           view,
@@ -301,15 +379,17 @@ async function goOnline() {
         hud.reset();
         setMode('match');
       } else if (msg.t === 'snap') online?.receive(msg);
-      else if (msg.t === 'error') status(COURT_ERRORS[msg.code]);
+      else if (msg.t === 'error') fail(COURT_ERRORS[msg.code]);
     },
     onClose(closeCode, reason) {
       // A refusal already said why.
       if (Object.hasOwn(COURT_ERRORS, reason)) return;
-      if (reason === 'replaced') status('This seat is being played in another tab.');
-      else status(closeCode === COURT_CLOSE ? 'The Court has closed.' : 'Lost the connection to the Court. Reload to rejoin.');
+      if (reason === 'replaced') fail('This seat is being played in another tab.');
+      else if (closeCode === COURT_CLOSE) fail('The Court has closed.');
+      else fail(match === offline ? 'Lost the connection to the Court.' : 'Lost the connection to the Court. Reload to rejoin.');
     },
   });
+  court = link;
 }
 
 function setMode(m: Mode) {
@@ -317,6 +397,12 @@ function setMode(m: Mode) {
   menu.el.hidden = m !== 'menu';
   pause.el.hidden = m !== 'paused';
   onlineStatus.el.hidden = m !== 'online';
+  if (m !== 'lobby' && m !== 'waiting') onlinePanel.hide();
+  // The Lobby's socket is open only while its list is on show.
+  if (m !== 'lobby' && stopLobby) {
+    stopLobby();
+    stopLobby = null;
+  }
   if (m === 'locker') locker.show();
   else locker.hide();
   if (m === 'menu') {
@@ -331,8 +417,13 @@ function setMode(m: Mode) {
 }
 
 newMatch(Date.now());
-// Dev only until issue 16: a production build has no way online.
-if (import.meta.env.DEV && (params.has('court') || params.has('host'))) void goOnline();
+const courtParam = ONLINE ? params.get('court') : null;
+const linked = courtParam === null ? null : readCourtCode(courtParam);
+if (courtParam !== null && !linked) {
+  leaveCourt();
+  void openLobby(COURT_ERRORS.not_found);
+} else if (linked && displayName) void goOnline(displayName, { code: linked });
+else if (linked) void openLobby(`Pick a Display name, then join Court ${linked}.`, linked);
 else if (params.has('practice')) startPractice();
 else setMode(params.has('play') ? 'match' : 'menu');
 // The menu doesn't draw the court, so draw it once: the Park stands behind the map until a Venue is played.
@@ -424,8 +515,10 @@ function update(dt: number) {
     if (mode === 'match' && match.curr.phase === 'over') quitToMenu();
     else if (mode === 'match') setMode('paused');
     else if (mode === 'paused') setMode('match');
-    else if (mode === 'locker') setMode('menu');
+    else if (mode === 'locker' || mode === 'lobby') setMode('menu');
   }
+  // Online there's no rematch yet (issue 13): the way on is back to the map.
+  onlineOver.el.hidden = !(mode === 'match' && match !== offline && match.curr.phase === 'over');
 
   if (mode === 'menu') {
     // The map is drawn instead of the court, which keeps its last frame behind the menu.

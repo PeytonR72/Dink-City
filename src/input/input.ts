@@ -15,6 +15,8 @@ const PAUSE_KEYS = ['Escape', 'KeyP'];
 const PAUSE_BUTTON = 9;
 const DEADZONE = 0.2;
 
+const isTextField = (t: EventTarget | null) => t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement;
+
 export class Input {
   private held = new Set<string>();
   private queued: ShotType | null = null;
@@ -23,7 +25,8 @@ export class Input {
 
   constructor(target: Window = window) {
     target.addEventListener('keydown', (e) => {
-      if (e.repeat) return;
+      // Keys typed into a Display name or Court code field are neither play nor a pause.
+      if (e.repeat || isTextField(e.target)) return;
       this.held.add(e.code);
       const shot = SHOT_KEYS[e.code];
       if (shot) this.queued ??= shot;
