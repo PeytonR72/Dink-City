@@ -19,7 +19,7 @@ function botMatch(seed: number) {
   const player = createBot(0, seed + 1, DIFFICULTY.hard, simTuning);
   const match: LocalMatch = new LocalMatch({
     sim: simTuning,
-    tuning: { ...viewTuning, gameSpeed: 1 },
+    viewTuning: { ...viewTuning, gameSpeed: 1 },
     view,
     input: () => player.think(observe(match.curr, 0)),
     rematch: () => {},

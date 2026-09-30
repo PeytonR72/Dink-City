@@ -1,6 +1,6 @@
 # Online multiplayer: architecture audit and plan
 
-Status: approved (2026-09-29). Phase 0 (ADR-0004 and glossary) is done. Phase 1 has not started.
+Status: approved (2026-09-29). Phases 0 (ADR-0004 and glossary) and 1 (client groundwork) are done. Phase 2 has not started.
 
 Goal: 1v1 online Matches, found through a public list of **Courts** or joined by code or link. The server owns the Sim and runs it at a fixed Tick. Each client predicts its own Player and interpolates the remote Player. The hitter's client reports each hit, and the server validates it. Single-player against a Bot, and Practice mode, keep working at every phase.
 
@@ -313,7 +313,9 @@ Every phase ends with `npm test`, `npm run typecheck` and `npm run e2e` green, a
 - `CONTEXT.md` has the "Online play" glossary section.
 - Decisions recorded above.
 
-### Phase 1: Client groundwork, no networking
+### Phase 1: Client groundwork, no networking ✅
+
+Done 2026-09-29 (`.scratch/multiplayer/issues/01-client-groundwork.md`). One deviation: the driver tells a `MatchView` what happens through callbacks (`tick`, `replay`, `replayed`, `draw`) rather than returning a frame, which keeps the old call order exactly.
 
 - **Local Side as a parameter:** replace `LOCAL_SIDE` in `renderer.ts` and `LOCAL` in `main.ts` with a value passed in (Hud already takes one). Add a test that renders or mirrors with the local Player on Side 1.
 - **A match-driver seam in `main.ts`:** move the current loop body (`tick`, hit-stop, Replay, dead-pause skip, rematch on shot press) behind a `LocalMatch` driver. Its frame API gives the renderer `(prev, curr, alpha, events)`. `main.ts` becomes mode, menu and driver selection. Behavior is unchanged, and `window.dink` keeps working.

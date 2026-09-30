@@ -44,7 +44,7 @@ const eventLog: ({ tick: number } & SimEvent)[] = [];
 /** The Match in play. Offline for now; online play will add another driver. */
 const match = new LocalMatch({
   sim: simTuning,
-  tuning: viewTuning,
+  viewTuning,
   input: () => input.sample(),
   rematch: () => newMatch(Date.now()),
   view: {
@@ -58,8 +58,7 @@ const match = new LocalMatch({
           showPractice();
         }
       } else hud.onEvents(s, events);
-      renderer.onEvents(s, events);
-      playEvents(events, endOf(s, local), viewTuning);
+      showSwingsAndSounds(s, events);
       for (const e of events) {
         eventLog.push({ tick: s.tick, ...e });
         if (e.kind === 'match' && e.winner === local) onMatchWon();
@@ -70,10 +69,7 @@ const match = new LocalMatch({
       hud.setReplay(on);
       renderer.cut();
     },
-    replayed(s, events) {
-      renderer.onEvents(s, events);
-      playEvents(events, endOf(s, match.local), viewTuning);
-    },
+    replayed: showSwingsAndSounds,
     draw(prev, curr, alpha, live, dt) {
       hud.update(live, dt);
       renderer.render(prev, curr, alpha, dt);
@@ -81,6 +77,12 @@ const match = new LocalMatch({
   },
 });
 renderer.setLocalSide(match.local);
+
+/** Live or replayed: where each hit was met, and the sounds. */
+function showSwingsAndSounds(s: SimState, events: readonly SimEvent[]) {
+  renderer.onEvents(s, events);
+  playEvents(events, endOf(s, match.local), viewTuning);
+}
 renderer.setColors(match.local, colors);
 const hud = new Hud(document.querySelector('#hud')!, match.local);
 unlockAudio();

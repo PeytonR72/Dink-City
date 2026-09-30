@@ -190,7 +190,7 @@ function checkContact(s: SimState, intents: readonly [Intent, Intent], t: SimTun
     let d = sweetSpotDistance(player, end, ball.pos, t);
     if (d === null) {
       if (!contact || sweetSpotDistance(player, end, ball.pos, t, REACH_SLACK) === null) continue;
-      d = 1;
+      d = 1; // The edge of reach.
     } else {
       // Wait for the ball to reach its closest point to the sweet spot, but
       // never let it leave reach unhit.

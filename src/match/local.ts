@@ -10,7 +10,7 @@ import type { MatchDriver, MatchView } from './driver';
 
 export interface LocalMatchOptions {
   sim: SimTuning;
-  tuning: ViewTuning;
+  viewTuning: ViewTuning;
   view: MatchView;
   /** Samples the local Player's Intent. Called once per Tick, and once per Replay frame to skip it. */
   input: () => Intent;
@@ -18,6 +18,7 @@ export interface LocalMatchOptions {
   rematch: () => void;
 }
 
+/** Drives an offline Match or Practice: the local Player on Side 0, the Bot or ball machine on Side 1. */
 export class LocalMatch implements MatchDriver {
   /** The local Player's Side. The Bot plays the other. */
   readonly local: SideIndex = 0;
@@ -62,7 +63,7 @@ export class LocalMatch implements MatchDriver {
 
   /** Steps one Tick. `local` overrides the local Player's input. */
   tick(local: Intent = this.opts.input()) {
-    const { sim, tuning, view } = this.opts;
+    const { sim, viewTuning: tuning, view } = this.opts;
     if (this.curr.phase === 'over') {
       if (local.shot) this.opts.rematch();
       return;
@@ -94,7 +95,7 @@ export class LocalMatch implements MatchDriver {
   frame(dt: number) {
     if (this.playReplay(dt)) return;
     if (this.hitStop > 0) this.hitStop -= dt;
-    else this.acc += dt * this.opts.tuning.gameSpeed;
+    else this.acc += dt * this.opts.viewTuning.gameSpeed;
 
     while (this.acc >= TICK && this.hitStop <= 0) {
       this.tick();

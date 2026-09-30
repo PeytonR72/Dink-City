@@ -12,6 +12,7 @@ export interface LocalView {
   landingFrom: SideIndex;
 }
 
+/** How `local`'s screen shows the court in state `s`. */
 export function localView(s: SimState, local: SideIndex): LocalView {
   const mirrored = endOf(s, local) === 1;
   const x = s.sides[local].players[0].pos.x;

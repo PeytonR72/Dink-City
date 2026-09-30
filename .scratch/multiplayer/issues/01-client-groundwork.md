@@ -107,3 +107,37 @@ The future Worker (`party/`) will import this folder, so it must be pure: no DOM
 - Renaming `src/sim/court.ts`. Its name collides with "Court" (the online room); that's noted in the plan and left for the user to decide.
 
 ## Comments
+
+### 2026-09-29: implemented (awaiting the user's playtest)
+
+Commits, one per slice, on top of the Phase 0 docs commit `0aa3a61`:
+
+1. `99c8749` **Local Side.** The renderer's mirroring, camera follow, Commit ring and landing marker come from a pure `localView(state, local)` (`src/render/localView.ts`), tested with the local Player on Side 1 at both Ends. `Renderer.setLocalSide(side)` defaults to 0. The overlay's `sides[1]` and `showVenue`'s Side 1 colors got offline-only comments.
+2. `c6ddf9f` **`LocalMatch`** (`src/match/local.ts`, interface in `src/match/driver.ts`). The accumulator, hit-stop, Game speed, Fault Replay, `skipDeadPause`, rally recording, rematch and Practice reps moved unchanged. `main.ts` keeps modes, menus, Venues, saves and progress. `window.dink` keeps its whole API. New `test/localMatch.test.ts` pins the Replay flow at the seam.
+3. `7baaa03` **Reported Contact.** `Intent.contact?`, `MatchConfig.contactMode?`, `REACH_SLACK = 0.05` m, and `autoContact()` (runs `step` with the Side forced to `auto`). `test/contact.test.ts` covers everything the issue lists. The bit-identical test is the golden seed (2026), compared by JSON every Tick. `CONTEXT.md`'s Intent entry now mentions `contact`.
+4. `435ac50` **`src/net/`:** `intentCodec`, `snapshot`, `simHash` (+ `SIM_VERSION`), `presets`, `name`, and an `index.ts`. `test/net.test.ts` has the boundary test and every case the issue lists. `-0` needed no normalizing: the whole seeded Game steps identically through `encodeState`/`decodeState`, and so does a state seeded with `-0`s. `src/tuning.ts` has the online/`?debug` comment.
+
+Plus a review-fix commit: doc comments on the new exports, one helper for swings and sounds (live and replayed), and `viewTuning` as the option name.
+
+**Results:**
+- Tests: 22 files and 201 tests pass. That's 167 before, plus 34 new.
+- Checks: typecheck, build (no tweakpane in dist) and e2e (16) all pass. The e2e screenshots weren't re-accepted.
+- The golden result `{ points: [11, 13], tick: 39353 }` is unchanged.
+- In-browser playtest (`?play&venue=park`, a hard Bot driving Side 0):
+  - Hit-stop held the Tick for one frame.
+  - A Kitchen Fault played its Replay, with the Match frozen, and cut back in at the Serve.
+  - The Match was won 11–3, and the star was recorded.
+  - A shot press started a rematch.
+  - Practice started and served. Esc paused and resumed it, and Quit to map then Park worked.
+
+**Deviations:**
+- **The driver's output goes through callbacks, not a returned frame.** `LocalMatch` calls a `MatchView` (`tick(s, events)`, `replay(on)`, `replayed(s, events)`, `draw(prev, curr, alpha, live, dt)`) in the order things happen. A returned frame would have moved Hud, sound and swing calls relative to the Replay cut-out, `skipDeadPause` and a mid-frame rematch. Callbacks keep them in the same order as before. `OnlineMatch` can call the same view from Snapshots.
+- **`main.ts` still uses `LocalMatch`-only members.** These are `rally`, `replay`, `practice`, `bot`, `tick` (for `dink.advance`), `startMatch` and `startPractice`. Phase 2 has to decide what `window.dink` means online.
+- **Within one Tick, `eventLog` and `onMatchWon` now run for all events before hit-stop and Replay creation,** instead of interleaved per event. Neither side affects the other, so nothing observable changes.
+- **No `Hud.setLocal`.** Nothing needs it yet, since `LocalMatch.local` is always 0.
+- **Extras:** `DEFAULT_PRESET`, and a `version` parameter on `simHash` (for its test).
+- **Presets carry only the rules.** Phase 2 adds `contactMode: ['reported', 'reported']` when a Court starts its Match.
+
+**Found, not fixed (pre-existing):**
+- **Practice's first rep keeps the previous Match's `rally`.** `startPractice` doesn't reset `rally`; only a Serve does. So a Fault Replay in the very first rep re-steps from the wrong start state. It's a one-line fix in `LocalMatch.startPractice`, left as-is because this slice had to preserve behavior.
+- **A Bot created mid-Serve never serves.** It schedules its Serve for an exact Tick counted from the phase start. The handoff's console recipe hits this if the page idled first; call `dink.newMatch(seed)` before creating the Bot.

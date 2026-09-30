@@ -14,11 +14,13 @@ export type QIntent = [number, number, number, number, number];
 const SHOTS: readonly (ShotType | null)[] = [null, 'soft', 'drive', 'lob'];
 const CONTACT = 4;
 
+/** An Intent for the wire. */
 export function quantizeIntent(i: Intent): QIntent {
   const bits = SHOTS.indexOf(i.shot) + (i.contact ? CONTACT : 0);
   return [axis(i.move.x), axis(i.move.y), axis(i.aim.x), axis(i.aim.y), bits];
 }
 
+/** The Intent both ends step with: the same on the client and the Court. */
 export function dequantizeIntent(q: QIntent): Intent {
   const [mx, my, ax, ay, bits] = q;
   const intent: Intent = { move: { x: mx / 127, y: my / 127 }, aim: { x: ax / 127, y: ay / 127 }, shot: SHOTS[bits & 3] };
