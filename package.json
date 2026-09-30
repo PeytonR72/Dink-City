@@ -9,8 +9,9 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p party",
     "e2e": "playwright test",
+    "party": "npm --prefix party run dev",
     "art": "node art/build.mjs"
   },
   "dependencies": {

@@ -1,0 +1,19 @@
+{
+  "name": "dink-city-party",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "smoke": "tsx scripts/smoke.ts"
+  },
+  "dependencies": {
+    "partyserver": "^0.5.10"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260930.1",
+    "tsx": "^4.23.15",
+    "wrangler": "^4.144.0"
+  }
+}

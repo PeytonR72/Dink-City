@@ -95,3 +95,74 @@ There's no Sim, no Lobby and no UI yet. It's verified by pure Vitest tests and a
 The Sim loop (03), the client (04), the Lobby (05) and the menu (06).
 
 ## Comments
+
+### 2026-09-29: implemented
+
+One commit, "Online play: a Court on wrangler dev that two Players can join" (the one that adds this comment).
+
+**What was built:**
+- **`src/net/protocol.ts`**, exported from `src/net/index.ts`. It has `PROTOCOL_VERSION`, `CourtErrorCode`, `CourtPlayer`, `HelloMsg`, `ClientMsg`, `CourtMsg` (`welcome`, `error`), `encode`, `decode` (checks the tag only) and `isHello`. Nothing else under `src/` changed.
+- **`party/`**:
+  - `package.json`: partyserver, wrangler, workers-types and tsx.
+  - `tsconfig.json`: Workers types, covering `src`.
+  - `wrangler.jsonc`: `COURT` and `LOBBY` bindings, the `v1` `new_sqlite_classes` migration, and `compatibility_date` 2026-09-26. No routes.
+  - `README.md`.
+  - Pure modules `courtCode.ts`, `courtSeats.ts` (`GRACE_MS = 30_000`) and `origin.ts`. Their tests are under `test/net/`.
+  - `court.ts`: a thin shell with `hibernate: false`.
+  - `worker.ts`: `/create` with RPC `provision` and 5 code attempts, `routePartykitRequest`, the Origin allowlist and CORS.
+  - `lobby.ts`: an empty stub.
+  - `scripts/smoke.ts`.
+- **Root:**
+  - `typecheck` also runs `tsc -p party`, and there's a new `npm run party` script.
+  - `tsconfig.json` includes `party/scripts`, so the smoke script is checked with DOM and node types.
+  - `.gitignore` has `.wrangler/`.
+
+**Results:**
+- Tests: 26 files and 229 tests pass. That's 201 before, plus 28 new (protocol, courtCode, origin, courtSeats). The seat tests cover the race for seat 1, a Host who never connects, and a Host leaving before start.
+- Checks: typecheck (root and `party/`), build and e2e (16) all pass.
+- The golden result `{ points: [11, 13], tick: 39353 }` is unchanged.
+- Smoke (`npm run party`, then `npm --prefix party run smoke`). This run was on :8788, because a stale `wrangler dev` held :8787 until it was stopped:
+  ```
+  ok   create refuses a foreign Origin
+  ok   create refuses a bad name
+  ok   create answers with a code (W483H) and a Host token
+  ok   create sends CORS headers
+  ok   plain HTTP to the Court is refused
+  ok   the Host is seated on Side 0
+  ok   a Guest is seated on Side 1
+  ok   the welcome lists both Players
+  ok   a third client gets full
+  ok   the Guest reconnects with its token and gets Side 1 back
+  ok   a Sim hash mismatch gets version
+  ok   a bad Display name gets bad_name
+  ok   an unprovisioned Court gets not_found
+  ```
+
+**Decisions (accepted by the user) where the issue left room:**
+- `provision()` makes the Host token with `crypto.randomUUID()`. Only the first call provisions; later calls are refused and change nothing. After 5 refused codes, `/create` answers 503 `busy`.
+- The Host holds seat 0 in `grace` from `provision`, so a Host who never connects closes the Court when the grace ends.
+- **Tokens:** an unknown token is treated as a tokenless join. A known token reclaims its seat even from a connection that's still open (a second tab), which gets closed with `4000 'replaced'`. The seat keeps its original name.
+- **Before the start,** a Guest's seat is freed when their grace ends. **After the start** (`start()`, for 03), an expired seat becomes `gone` and can't be reclaimed (`full`). This leaves room for the Takeover Bot (14).
+- **Closes:** every error except `bad_message` closes with 4000. `bad_message` covers more than 2048 chars, not JSON, or failing the guard; it's answered and the socket stays open. A second `hello` on a seated socket is ignored.
+- **Origin:** `https://dink-city.vercel.app`, plus `http://localhost` and `http://127.0.0.1` on any port. A missing Origin is refused. `onBeforeConnect` routes on `className`, the binding name, because partyserver's `party` is deprecated.
+- **Smoke runner:** `tsx`, a dev dependency of `party/` only. The root gets no new dependencies, because Node 22 can't strip types for the game's extensionless imports.
+
+**Review fixes (`/code-review`):**
+- `onError` frees the seat before closing the socket, since closing can throw.
+- `hello` ignores sockets that aren't open, so a closing socket can't take a seat.
+- Lobby upgrades get 404 until 05.
+- `/create` rejects a Content-Length over 1024 before reading the body.
+- Doc comments on the remaining exports.
+- `JoinResult`'s codes derive from `CourtErrorCode`.
+- A `withStatus` helper in `courtSeats`.
+
+**Gotchas and notes for later issues:**
+- **partyserver doesn't answer a client close with no code** (1005), so Node's `ws.close()` hangs. `Court.onClose` calls `conn.close(1000)` inside a try/catch.
+- **A refused socket can still deliver its `hello`.** `send` after `close` throws in workerd, so `send` checks `readyState`.
+- **`wrangler dev` hot-reloads on every edit and wipes the Courts.** A smoke run that overlaps an edit fails with `not_found`.
+- **Left for later:**
+  - 04 needs a typed guard for Court→client messages, because `decode` only checks the tag.
+  - 04 must handle the `4000 'closed'` close reason from a Court that closed (no `error` message is sent first).
+  - 03 or 05 might add a timeout for sockets that never say hello.
+  - An exception from `provision` over RPC answers 500 without CORS headers.
+  - `/create` uses the `bad_preset` and `busy` error strings, which are HTTP-only and aren't in `CourtErrorCode`.

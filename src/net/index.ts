@@ -3,5 +3,6 @@
 export * from './intentCodec';
 export * from './name';
 export * from './presets';
+export * from './protocol';
 export * from './simHash';
 export * from './snapshot';
