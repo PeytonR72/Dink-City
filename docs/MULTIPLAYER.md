@@ -330,6 +330,9 @@ Exit: no visible change, and the new tests are green.
 
 ### Phase 2: Court, Lobby, and naive online play
 
+Issues: `.scratch/multiplayer/issues/` 02 (Court and handshake), 03 (the Court runs the Match), 04 (`OnlineMatch`), 05 (Lobby), 06 (the menu's Online panel).
+
+
 **Server (`party/`, mirroring PokerElo):**
 
 - `party/package.json` (`partyserver`, `wrangler`, `@cloudflare/workers-types`) and a `party/tsconfig.json` for Workers types.
@@ -379,6 +382,9 @@ Exit criteria:
 
 ### Phase 3: Clock sync, input timing, local prediction
 
+Issues: 07 (clock sync, redundant inputs, jitter buffer, netcode harness), 08 (Rewind window), 09 (client prediction).
+
+
 - Ping/pong clock sync. The client runs the predicted timeline ahead of the Court's Tick.
 - Redundant input packets, a Court jitter buffer, the missing-input policy, and **rewind within the window**.
 - Client reconciliation: on each snapshot, re-simulate from `snap.state` with un-acked Intents. Smooth small visual corrections of the local Player over a few frames.
@@ -388,6 +394,9 @@ Exit: movement feels local at 150 ms RTT (checked with dev-tools throttling), an
 
 ### Phase 4: Hitter-reported hits, remote interpolation, ball clock blend
 
+Issues: 10 (Reported Contact online), 11 (remote interpolation, ball clock blend, event policy).
+
+
 - Online Matches set `contactMode: 'reported'` for human Sides. The client flags Contact from its prediction, and the Court validates it with rewind.
 - Remote Player drawn from the interpolated timeline. The renderer is fed a composed `(prev, curr, alpha)` view: local Player predicted, remote Player interpolated, ball on the blended clock.
 - Event policy: local hit/bounce plays immediately, and outcomes come from the Court. A rejected predicted hit is corrected once.
@@ -396,6 +405,9 @@ Exit: movement feels local at 150 ms RTT (checked with dev-tools throttling), an
 Exit: rallies at 150 ms RTT feel like single-player for the hitter, remote swings line up with the ball, and there are no ghost points.
 
 ### Phase 5: Online Match flow
+
+Issues: 12 (online time rules, leaving, stalls), 13 (rematch), 14 (Takeover Bot).
+
 
 - **No time distortion online:** Fault Replays off (banner only), hit-stop off, `gameSpeed` fixed at 1, and `MAX_FRAME` stalls resync the clock instead of dropping time. Offline is unchanged.
 - **Pause** online becomes a "Leave match?" menu, not a Sim pause. **Match over** offers a rematch (both players press), which makes a new seed in the same Court. The Court doesn't return to the list.
@@ -407,10 +419,13 @@ Exit: a full Long (best of 3) Match online with Faults and a rematch. A Player c
 
 ### Phase 6: Ship
 
+Issues: 15 (two-browser e2e), 16 (deploy; needs the user).
+
+
 - Playwright two-context e2e against `wrangler dev`: create, see the row in the list, join by click, a scripted Rally via `window.dink`, and a scored point.
 - Deploy the Worker. Decide and attach a custom domain (deferred from Decision 2), then tighten the Origin allowlist.
 - Point the Vercel client at the server with a `VITE_PARTY_HOST` env var. Smoke test the live URLs.
-- Add `.scratch/` issues per phase, following the repo's tracker convention.
+- ~~Add `.scratch/` issues per phase~~: done (02–16), listed under each phase.
 
 ---
 
