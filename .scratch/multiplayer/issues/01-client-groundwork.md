@@ -110,12 +110,12 @@ The future Worker (`party/`) will import this folder, so it must be pure: no DOM
 
 ### 2026-09-29: implemented (awaiting the user's playtest)
 
-Commits, one per slice, on top of the Phase 0 docs commit `0aa3a61`:
+Commits, one per slice, on top of the Phase 0 docs commit `246fed8`:
 
-1. `99c8749` **Local Side.** The renderer's mirroring, camera follow, Commit ring and landing marker come from a pure `localView(state, local)` (`src/render/localView.ts`), tested with the local Player on Side 1 at both Ends. `Renderer.setLocalSide(side)` defaults to 0. The overlay's `sides[1]` and `showVenue`'s Side 1 colors got offline-only comments.
-2. `c6ddf9f` **`LocalMatch`** (`src/match/local.ts`, interface in `src/match/driver.ts`). The accumulator, hit-stop, Game speed, Fault Replay, `skipDeadPause`, rally recording, rematch and Practice reps moved unchanged. `main.ts` keeps modes, menus, Venues, saves and progress. `window.dink` keeps its whole API. New `test/localMatch.test.ts` pins the Replay flow at the seam.
-3. `7baaa03` **Reported Contact.** `Intent.contact?`, `MatchConfig.contactMode?`, `REACH_SLACK = 0.05` m, and `autoContact()` (runs `step` with the Side forced to `auto`). `test/contact.test.ts` covers everything the issue lists. The bit-identical test is the golden seed (2026), compared by JSON every Tick. `CONTEXT.md`'s Intent entry now mentions `contact`.
-4. `435ac50` **`src/net/`:** `intentCodec`, `snapshot`, `simHash` (+ `SIM_VERSION`), `presets`, `name`, and an `index.ts`. `test/net.test.ts` has the boundary test and every case the issue lists. `-0` needed no normalizing: the whole seeded Game steps identically through `encodeState`/`decodeState`, and so does a state seeded with `-0`s. `src/tuning.ts` has the online/`?debug` comment.
+1. `5bfa205` **Local Side.** The renderer's mirroring, camera follow, Commit ring and landing marker come from a pure `localView(state, local)` (`src/render/localView.ts`), tested with the local Player on Side 1 at both Ends. `Renderer.setLocalSide(side)` defaults to 0. The overlay's `sides[1]` and `showVenue`'s Side 1 colors got offline-only comments.
+2. `d34083d` **`LocalMatch`** (`src/match/local.ts`, interface in `src/match/driver.ts`). The accumulator, hit-stop, Game speed, Fault Replay, `skipDeadPause`, rally recording, rematch and Practice reps moved unchanged. `main.ts` keeps modes, menus, Venues, saves and progress. `window.dink` keeps its whole API. New `test/localMatch.test.ts` pins the Replay flow at the seam.
+3. `6899240` **Reported Contact.** `Intent.contact?`, `MatchConfig.contactMode?`, `REACH_SLACK = 0.05` m, and `autoContact()` (runs `step` with the Side forced to `auto`). `test/contact.test.ts` covers everything the issue lists. The bit-identical test is the golden seed (2026), compared by JSON every Tick. `CONTEXT.md`'s Intent entry now mentions `contact`.
+4. `5490bdb` **`src/net/`:** `intentCodec`, `snapshot`, `simHash` (+ `SIM_VERSION`), `presets`, `name`, and an `index.ts`. `test/net.test.ts` has the boundary test and every case the issue lists. `-0` needed no normalizing: the whole seeded Game steps identically through `encodeState`/`decodeState`, and so does a state seeded with `-0`s. `src/tuning.ts` has the online/`?debug` comment.
 
 Plus a review-fix commit: doc comments on the new exports, one helper for swings and sounds (live and replayed), and `viewTuning` as the option name.
 
