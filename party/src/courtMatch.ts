@@ -1,8 +1,8 @@
 // The Court's Match engine, pure: everything the Court does per Tick, with no Durable Object and no clock. The
 // Court decides when to step (`tickLoop`) and who to send to. Each Side's Intents wait here for their Tick; later
-// issues grow the input handling (rewind, Reported Contact, the Takeover Bot) behind the same interface.
+// issues grow the input handling (Reported Contact, the Takeover Bot) behind the same interface.
 import { PRESETS, dequantizeIntent, type CourtMsg, type InMsg, type PresetId, type SnapEvent } from '../../src/net';
-import { createInitialState, step, type Intent, type ShotType, type SideIndex, type SimState, type SimTuning } from '../../src/sim';
+import { createInitialState, step, type Intent, type SideIndex, type SimState, type SimTuning } from '../../src/sim';
 
 /** A Snapshot goes out once this many Ticks have run since the last one: 30 Hz. */
 const SNAP_TICKS = 2;
@@ -10,6 +10,10 @@ const SNAP_TICKS = 2;
 export const MAX_AHEAD_TICKS = 30;
 /** With no Intent coming, a Side's last move fades to standing still over this many Ticks. */
 export const DECAY_TICKS = 6;
+/** The Rewind window: an Intent this many Ticks late still lands on its Tick. */
+export const REWIND_TICKS = 15;
+/** The ring buffer keeps this many past states, twice the window, for Reported Contact (issue 10) to look back on. */
+const HISTORY_TICKS = 30;
 
 /** A message for the Player on `side`. */
 export interface Outgoing {
@@ -37,37 +41,64 @@ export interface CourtMatch {
 
 /** One Side's incoming Intents. */
 interface Feed {
-  /** Intents for Ticks not stepped yet, by Tick. */
-  ahead: Map<number, Intent>;
+  /** Its client's Intents by Tick, from the oldest the ring buffer holds to the furthest ahead. */
+  received: Map<number, Intent>;
   /** The last Tick up to which every Intent has arrived (or been given up by the client); -1 before any. */
   ack: number;
-  /** The last Intent stepped that came from the client, and how many Ticks since have had none. */
+  /** The Tick from which its Side stands still for good, once the Player's grace ran out. */
+  goneAt: number | null;
+}
+
+/** The missing-input policy's memory for one Side: the last real Intent stepped, and how many Ticks since had none. */
+interface Fill {
   last: Intent;
   missing: number;
-  /** Shot presses that arrived after their Tick was stepped, waiting for the next. */
-  lateShots: ShotType[];
-  gone: boolean;
+}
+
+/** The ring buffer's entry for one Tick: the state stepped from, each Side's Fill before it, and how it was stepped. */
+interface Past {
+  tick: number;
+  state: SimState;
+  fills: readonly [Fill, Fill];
+  intents: readonly [Intent, Intent];
+  /** Which Intents came from the client, and which the missing-input policy filled in. The Takeover Bot's log (14)
+   * and Reported Contact (10) read these. */
+  real: readonly [boolean, boolean];
 }
 
 /**
  * Each Side steps Tick T with the Intent its client labeled T. An `in` carries a run of Ticks from the oldest the
  * client hasn't had acknowledged, so a run starting past `ack + 1` means the client gave up the Ticks between, and
  * `ack` jumps over them. A Tick with no Intent repeats the last move and aim with no shot and no Contact, the move
- * fading to nothing over `DECAY_TICKS`, so a stalled or hidden tab stops. An Intent for a Tick already stepped is
- * dropped, but its shot press is applied on the next Tick (issue 08 rewinds instead). A Side with no input yet
- * stands still. Human Sides are `auto` until issue 10, so `contact` has no effect.
+ * fading to nothing over `DECAY_TICKS`, so a stalled or hidden tab stops. A Side with no input yet stands still.
+ * Human Sides are `auto` until issue 10, so `contact` has no effect.
+ *
+ * The Rewind window: an Intent up to `REWIND_TICKS` late replaces the fill, and the next `advance` re-steps from its
+ * Tick, so the Match comes out as if it had come on time. Older ones are dropped. Moment events go out at once and are
+ * never told twice; outcome events wait until no rewind can change them (see `stepOnce`).
  */
 export function createCourtMatch(opts: {
   seed: number;
   preset: PresetId;
   tuning: SimTuning;
-  /** Watches each step: the Tick stepped from and both Sides' Intents. */
+  /** Watches each step, re-steps included: the Tick stepped from and both Sides' Intents. */
   onStep?: (tick: number, intents: readonly [Intent, Intent]) => void;
 }): CourtMatch {
   let state = createInitialState(opts.seed, PRESETS[opts.preset].config);
   const feeds: [Feed, Feed] = [feed(), feed()];
-  /** Every event since the last Snapshot. Both Sides get the same list. */
-  let events: SnapEvent[] = [];
+  let fills: readonly [Fill, Fill] = [fill(), fill()];
+  /** By Tick modulo `HISTORY_TICKS`. */
+  const history: Past[] = [];
+  /** The oldest Tick a late Intent asks to re-step from, if any. */
+  let rewindFrom: number | null = null;
+  /** Moment events waiting for the next Snapshot. */
+  let outbox: SnapEvent[] = [];
+  /** Moment events told, as far back as a rewind can reach. */
+  let told: Told[] = [];
+  /** Told moment events that no event in the current timeline stands for: owed. */
+  let unmatched: Told[] = [];
+  /** Outcome events not sent yet, waiting until they're final. */
+  let held: SnapEvent[] = [];
   let snapTick = 0;
   const over = () => state.phase === 'over';
   /** A Snapshot for `side`, followed by `over` once the Match has a winner. */
@@ -75,6 +106,51 @@ export function createCourtMatch(opts: {
     const snap: CourtMsg = { t: 'snap', tick: state.tick, ack: feeds[side].ack, state, events: evs };
     const winner = state.match.winner;
     return over() && winner !== null ? [snap, { t: 'over', winner }] : [snap];
+  };
+
+  /**
+   * Steps one Tick from `state`, buffering it, and sorts out its events. The moment ones (`hit`, `bounce`, `net`) go
+   * out in the next Snapshot, unless a told one stands for them: a rewind matches the events told from the Ticks it
+   * re-steps, in order, by kind and Side, against the new ones. A told event no new one matches is never taken back
+   * (clients already played its sound); it stays owed, and absorbs the next like event while it's inside the window,
+   * usually the same one a few Ticks on. The cost: an owed `bounce` can swallow a different bounce's sound. The
+   * outcome events (`dead`, `rally-won`, `game`, `match`) are held until they're older than the window, so clients
+   * hear them `REWIND_TICKS` late but only ever the true one. A Snapshot's events are in Tick order.
+   */
+  const stepOnce = () => {
+    const tick = state.tick;
+    const a = intentFor(feeds[0], fills[0], tick);
+    const b = intentFor(feeds[1], fills[1], tick);
+    const intents = [a.intent, b.intent] as const;
+    history[tick % HISTORY_TICKS] = { tick, state, fills, intents, real: [a.real, b.real] };
+    fills = [a.fill, b.fill];
+    opts.onStep?.(tick, intents);
+    state = step(state, intents, opts.tuning);
+    for (const e of state.events) {
+      const ev: SnapEvent = { ...e, tick: state.tick };
+      if (OUTCOMES.has(ev.kind)) {
+        held.push(ev);
+        continue;
+      }
+      const i = unmatched.findIndex((r) => r.kind === ev.kind && r.side === sideOf(ev));
+      if (i >= 0) unmatched.splice(i, 1)[0]!.at = ev.tick;
+      else outbox.push(ev);
+    }
+  };
+
+  /** Goes back to the state before Tick `from` and re-steps to the Tick it was on. */
+  const rewind = (from: number) => {
+    const past = history[from % HISTORY_TICKS];
+    // `receive` only asks for Ticks inside the window, which the buffer always holds.
+    if (past?.tick !== from) throw new Error(`no buffered state for Tick ${from}`);
+    const to = state.tick;
+    state = past.state;
+    fills = past.fills;
+    // The re-stepped Ticks' events come again: the outcomes and untold moments are dropped, the told ones matched.
+    held = held.filter((e) => e.tick <= from);
+    outbox = outbox.filter((e) => e.tick <= from);
+    unmatched = told.filter((e) => e.at > from || unmatched.includes(e));
+    while (state.tick < to && !over()) stepOnce();
   };
 
   return {
@@ -87,36 +163,42 @@ export function createCourtMatch(opts: {
     receive(side, msg) {
       const f = feeds[side];
       const limit = state.tick + MAX_AHEAD_TICKS;
-      if (f.gone || msg.from > limit) return;
+      if (over() || f.goneAt !== null || msg.from > limit) return;
       f.ack = Math.max(f.ack, msg.from - 1);
       msg.intents.forEach((q, i) => {
         const tick = msg.from + i;
         if (tick <= f.ack || tick > limit) return;
         f.ack = tick;
-        const intent = dequantizeIntent(q);
-        if (tick >= state.tick) f.ahead.set(tick, intent);
-        else if (intent.shot) f.lateShots.push(intent.shot);
+        if (tick < state.tick - REWIND_TICKS) return;
+        f.received.set(tick, dequantizeIntent(q));
+        if (tick < state.tick) rewindFrom = Math.min(rewindFrom ?? tick, tick);
       });
     },
     disconnect(side) {
-      feeds[side] = { ...feed(), last: feeds[side].last, missing: feeds[side].missing };
+      dropIntents(feeds[side], (tick) => tick >= state.tick);
+      feeds[side].ack = -1;
     },
     gone(side) {
-      feeds[side] = { ...feed(), gone: true };
+      // The Court says so again on every later grace expiry; the first Tick stays, so a rewind re-steps the same.
+      feeds[side].goneAt ??= state.tick;
     },
     advance(ticks) {
       if (over()) return [];
-      for (let i = 0; i < ticks && !over(); i++) {
-        const intents = [intentFor(feeds[0], state.tick), intentFor(feeds[1], state.tick)] as const;
-        opts.onStep?.(state.tick, intents);
-        state = step(state, intents, opts.tuning);
-        for (const e of state.events) events.push({ ...e, tick: state.tick });
-      }
+      if (rewindFrom !== null) rewind(rewindFrom);
+      rewindFrom = null;
+      for (let i = 0; i < ticks && !over(); i++) stepOnce();
+      for (const f of feeds) dropIntents(f, (tick) => tick < state.tick - HISTORY_TICKS);
       if (state.tick - snapTick < SNAP_TICKS && !over()) return [];
       snapTick = state.tick;
-      const out = ([0, 1] as const).flatMap((side) => snapFor(side, events).map((msg) => ({ side, msg })));
-      events = [];
-      return out;
+      // Outcomes are final once no rewind can reach them, or once the Match is over.
+      const final = held.filter((e) => over() || e.tick <= state.tick - REWIND_TICKS);
+      held = held.filter((e) => !final.includes(e));
+      const events = outbox.concat(final).sort((x, y) => x.tick - y.tick);
+      const reach = state.tick - REWIND_TICKS;
+      told = told.concat(outbox.map((e) => ({ kind: e.kind, side: sideOf(e), at: e.tick }))).filter((e) => e.at > reach);
+      unmatched = unmatched.filter((e) => e.at > reach);
+      outbox = [];
+      return ([0, 1] as const).flatMap((side) => snapFor(side, events).map((msg) => ({ side, msg })));
     },
     current(side) {
       return snapFor(side, []);
@@ -124,28 +206,44 @@ export function createCourtMatch(opts: {
   };
 }
 
-/** The Intent a Side steps Tick `tick` with: its client's, or the missing-input fill, plus any late shot press. */
-function intentFor(f: Feed, tick: number): Intent {
-  if (f.gone) return idle();
-  let intent = f.ahead.get(tick);
-  if (intent) {
-    f.ahead.delete(tick);
-    f.last = intent;
-    f.missing = 0;
-  } else {
-    f.missing++;
-    const k = Math.max(0, 1 - (f.missing - 1) / DECAY_TICKS);
-    intent = { move: { x: f.last.move.x * k, y: f.last.move.y * k }, aim: f.last.aim, shot: null };
-  }
-  const late = f.lateShots.shift();
-  if (late === undefined) return intent;
-  // Its own press waits for the next Tick.
-  if (intent.shot) f.lateShots.push(intent.shot);
-  return { ...intent, shot: late };
+const OUTCOMES: ReadonlySet<SnapEvent['kind']> = new Set(['dead', 'rally-won', 'game', 'match']);
+
+/** A moment event told to clients: what it was, and the Tick of the event in the current timeline it stands for. */
+interface Told {
+  kind: SnapEvent['kind'];
+  side: SideIndex | null;
+  at: number;
+}
+
+/** The Side an event belongs to, for matching re-simulated events with told ones. */
+function sideOf(e: SnapEvent): SideIndex | null {
+  return e.kind === 'hit' ? e.side : null;
+}
+
+/**
+ * The Intent a Side steps Tick `tick` with, whether it came from the client, and the Fill after it: the client's
+ * Intent, or the missing-input fill. A pure function of the Feed and the Fill before, so a re-simulation repeats it.
+ */
+function intentFor(f: Feed, before: Fill, tick: number): { intent: Intent; real: boolean; fill: Fill } {
+  if (f.goneAt !== null && tick >= f.goneAt) return { intent: idle(), real: false, fill: before };
+  const intent = f.received.get(tick);
+  if (intent) return { intent, real: true, fill: { last: intent, missing: 0 } };
+  const missing = before.missing + 1;
+  const k = Math.max(0, 1 - (missing - 1) / DECAY_TICKS);
+  const { move, aim } = before.last;
+  return { intent: { move: { x: move.x * k, y: move.y * k }, aim, shot: null }, real: false, fill: { last: before.last, missing } };
+}
+
+function dropIntents(f: Feed, which: (tick: number) => boolean) {
+  for (const tick of f.received.keys()) if (which(tick)) f.received.delete(tick);
 }
 
 function feed(): Feed {
-  return { ahead: new Map(), ack: -1, last: idle(), missing: 0, lateShots: [], gone: false };
+  return { received: new Map(), ack: -1, goneAt: null };
+}
+
+function fill(): Fill {
+  return { last: idle(), missing: 0 };
 }
 
 function idle(): Intent {

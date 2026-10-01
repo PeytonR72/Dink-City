@@ -1,11 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import { DIFFICULTY, createBot } from '../../src/bot/bot';
 import { observe } from '../../src/bot/observe';
-import { quantizeIntent, type CourtMsg, type InMsg, type QIntent, type SnapEvent } from '../../src/net';
+import { quantizeIntent, type CourtMsg, type InMsg, type PresetId, type QIntent, type SnapEvent } from '../../src/net';
 import { PRESETS } from '../../src/net/presets';
 import { createInitialState, step, type Intent, type SideIndex } from '../../src/sim';
 import { simTuning } from '../../src/tuning';
-import { DECAY_TICKS, MAX_AHEAD_TICKS, createCourtMatch, type Outgoing } from '../../party/src/courtMatch';
+import { DECAY_TICKS, MAX_AHEAD_TICKS, REWIND_TICKS, createCourtMatch, type Outgoing } from '../../party/src/courtMatch';
 
 // A whole Match headlessly takes a few seconds.
 vi.setConfig({ testTimeout: 60_000 });
@@ -13,11 +13,20 @@ vi.setConfig({ testTimeout: 60_000 });
 const SEED = 4242;
 const ZERO: Intent = { move: { x: 0, y: 0 }, aim: { x: 0, y: 0 }, shot: null };
 
-/** A Court Match that logs the Intents it steps each Tick with. */
-function court() {
+/** A Court Match that logs every step, re-steps included, and the Intents each Tick was last stepped with. */
+function court(preset: PresetId = 'quick') {
   const stepped: [number, Intent, Intent][] = [];
-  const m = createCourtMatch({ seed: SEED, preset: 'quick', tuning: simTuning, onStep: (tick, [a, b]) => stepped.push([tick, a, b]) });
-  return Object.assign(m, { stepped });
+  const byTick = new Map<number, readonly [Intent, Intent]>();
+  const m = createCourtMatch({
+    seed: SEED,
+    preset,
+    tuning: simTuning,
+    onStep: (tick, [a, b]) => {
+      stepped.push([tick, a, b]);
+      byTick.set(tick, [a, b]);
+    },
+  });
+  return Object.assign(m, { stepped, byTick });
 }
 
 /** An `in` with Intents for the Ticks from `from` on. */
@@ -135,25 +144,144 @@ describe('the Court Match', () => {
     expect(m.current(1)[0]).toMatchObject({ ack: -1 });
   });
 
-  it('drops a late Intent but applies its shot press on the next Tick', () => {
-    const m = court();
-    m.advance(120);
-    m.receive(0, input(118, RIGHT, { ...RIGHT, shot: 'drive' }, RIGHT));
-    m.advance(2);
-    // Ticks 118 and 119 were stepped before they came: the move is lost, the press lands on 120 with 120's move.
-    expect(m.stepped.slice(-2).map(([t, a]) => [t, a.move.x, a.shot])).toEqual([
-      [120, 1, 'drive'],
-      [121, 1, null],
+  it('rewinds for a late Intent inside the window, so the Match comes out as if it came on time', () => {
+    const moves = Array.from({ length: 10 }, (_, i): Intent => ({ move: { x: i % 3 ? -1 : 1, y: 0.5 }, aim: { x: 0, y: 1 }, shot: null }));
+    const onTime = court();
+    onTime.advance(100);
+    onTime.receive(0, input(100, ...moves));
+    onTime.advance(20);
+    const late = court();
+    late.advance(100 + REWIND_TICKS);
+    late.receive(0, input(100, ...moves));
+    late.advance(20 - REWIND_TICKS);
+    expect(late.state).toEqual(onTime.state);
+    // The Ticks after the late run are filled from it, fading out, as they would have been.
+    expect([...late.byTick].filter(([t]) => t >= 110).map(([, [a]]) => +a.move.x.toFixed(3)).slice(0, 8)).toEqual([
+      1, 0.833, 0.667, 0.5, 0.333, 0.167, 0, 0,
     ]);
+  });
+
+  it('drops an Intent older than the window, but still acknowledges it', () => {
+    const m = court();
+    m.advance(100 + REWIND_TICKS + 1);
+    m.receive(0, input(100, RIGHT));
+    m.advance(1);
+    expect(m.state).toEqual(reference(Array.from({ length: 100 + REWIND_TICKS + 2 }, () => [ZERO, ZERO])));
+    expect(m.current(0)[0]).toMatchObject({ ack: 100 });
+  });
+
+  it('lands a late shot press inside the window on the Tick it was meant for', () => {
+    const m = court();
+    m.advance(130);
+    m.receive(0, input(119, RIGHT, { ...RIGHT, shot: 'drive' }, RIGHT));
+    m.advance(1);
+    expect([119, 120, 121].map((t) => m.byTick.get(t)![0].shot)).toEqual([null, 'drive', null]);
+    const onTime = court();
+    onTime.advance(110);
+    onTime.receive(0, input(119, RIGHT, { ...RIGHT, shot: 'drive' }, RIGHT));
+    onTime.advance(21);
+    expect(m.state).toEqual(onTime.state);
     expect(m.state.phase).toBe('rally');
   });
 
-  it('keeps a late press for the Tick after when that Tick has a press of its own', () => {
+  it('re-simulates the Ticks a rewind covers from buffered states and Intents alone', () => {
+    const m = court();
+    m.receive(0, input(100, RIGHT));
+    m.advance(110);
+    const steps = m.stepped.length;
+    m.receive(0, input(101, RIGHT, RIGHT));
+    m.receive(1, input(103, RIGHT));
+    m.advance(0);
+    // One rewind from the oldest late Tick, however many Intents came.
+    expect(m.stepped.slice(steps).map(([t]) => t)).toEqual([101, 102, 103, 104, 105, 106, 107, 108, 109]);
+  });
+
+  it('sends a hit a rewind adds once, and a hit a rewind keeps never again', () => {
     const m = court();
     m.advance(120);
-    m.receive(0, input(119, { ...ZERO, shot: 'lob' }, { ...ZERO, shot: 'soft' }));
-    m.advance(2);
-    expect(m.stepped.slice(-2).map(([, a]) => a.shot)).toEqual(['lob', 'soft']);
+    m.receive(0, input(120, { ...ZERO, shot: 'drive' }));
+    const first = [1, 2, 3, 4].flatMap(() => m.advance(1));
+    expect(snaps(first, 0).flatMap((s) => s.events).filter((e) => e.kind === 'hit')).toHaveLength(1);
+    // Side 1's late Intents rewind past the Serve; the re-simulation hits again, which was already sent.
+    m.receive(1, input(119, ZERO, ZERO, ZERO));
+    const later = [1, 2, 3, 4].flatMap(() => m.advance(1));
+    expect(m.stepped.filter(([t, a]) => t === 120 && a.shot).length).toBe(2);
+    expect(snaps(later, 0).flatMap((s) => s.events).filter((e) => e.kind === 'hit')).toEqual([]);
+  });
+
+  it('holds outcome events until they are older than the window, then sends each once', () => {
+    const m = court();
+    m.advance(120);
+    m.receive(0, input(120, { ...ZERO, shot: 'drive' }));
+    const out: Outgoing[] = [];
+    while (m.state.phase !== 'dead') out.push(...m.advance(1));
+    const dead = m.state.events.find((e) => e.kind === 'dead')!;
+    const deadTick = m.state.tick;
+    for (let i = 0; i < 40; i++) out.push(...m.advance(1));
+    const told = snaps(out, 0).flatMap((s) => s.events.map((e) => ({ ...e, at: s.tick })));
+    const outcomes = told.filter((e) => e.kind === 'dead' || e.kind === 'rally-won');
+    expect(outcomes.map((e) => [e.kind, e.tick])).toEqual([
+      ['dead', deadTick],
+      ['rally-won', deadTick],
+    ]);
+    expect(outcomes[0]).toMatchObject(dead);
+    expect(outcomes.every((e) => e.at >= e.tick + REWIND_TICKS && e.at < e.tick + REWIND_TICKS + 2)).toBe(true);
+    // Each Snapshot's events are in Tick order, whatever was held back.
+    for (const s of snaps(out, 0)) expect(s.events.map((e) => e.tick)).toEqual([...s.events.map((e) => e.tick)].sort((a, b) => a - b));
+  });
+
+  it('comes out the same with one Side always late, across Serves, hits, Rallies won and a Game switch', () => {
+    // An on-time Match on Bot Intents, to just past the first Game.
+    const onTime = court('long');
+    const bots = [createBot(0, 1, DIFFICULTY.hard, simTuning), createBot(1, 2, DIFFICULTY.hard, simTuning)] as const;
+    const inputs: [QIntent, QIntent][] = [];
+    const onTimeOut: Outgoing[] = [];
+    let end = Infinity;
+    while (onTime.state.tick < end) {
+      const q = [0, 1].map((side) => quantizeIntent(bots[side]!.think(observe(onTime.state, side as SideIndex)))) as [QIntent, QIntent];
+      inputs.push(q);
+      onTime.receive(0, { t: 'in', from: onTime.state.tick, intents: [q[0]] });
+      onTime.receive(1, { t: 'in', from: onTime.state.tick, intents: [q[1]] });
+      onTimeOut.push(...onTime.advance(1));
+      if (end === Infinity && onTime.state.events.some((e) => e.kind === 'game')) end = onTime.state.tick + 120;
+    }
+
+    // The same Intents, with Side 0's arriving in batches up to 12 Ticks after their Tick.
+    const late = court('long');
+    const lateOut: Outgoing[] = [];
+    let sentTo = 0;
+    for (let tick = 0; tick < end; tick++) {
+      late.receive(1, { t: 'in', from: tick, intents: [inputs[tick]![1]] });
+      if (tick % 13 === 12) {
+        late.receive(0, { t: 'in', from: sentTo, intents: inputs.slice(sentTo, tick).map((q) => q[0]) });
+        sentTo = tick;
+      }
+      lateOut.push(...late.advance(1));
+    }
+    late.receive(0, { t: 'in', from: sentTo, intents: inputs.slice(sentTo, end).map((q) => q[0]) });
+    lateOut.push(...late.advance(0));
+    expect(late.state).toEqual(onTime.state);
+
+    const told = (out: Outgoing[]) => snaps(out, 0).flatMap((s) => s.events);
+    const kinds = told(onTimeOut).map((e) => e.kind);
+    for (const kind of ['hit', 'rally-won', 'game'] as const) expect(kinds).toContain(kind);
+    expect(told(onTimeOut).some((e) => e.kind === 'hit' && e.variant === 'serve')).toBe(true);
+    // Outcomes go out once they're final, so the late Match tells exactly the same ones.
+    const outcomes = (out: Outgoing[]) => told(out).filter((e) => ['dead', 'rally-won', 'game', 'match'].includes(e.kind));
+    expect(outcomes(lateOut)).toEqual(outcomes(onTimeOut).filter((e) => e.tick <= end - REWIND_TICKS));
+    // Each true hit is told once, though most of Side 0's were stepped more than once: either on its Tick, or up to
+    // a window early, when a timeline with filled-in Intents hit first. A few hits told from such timelines never
+    // happened (the real Intents moved the Player out of reach), but they're rare.
+    const hits = (out: Outgoing[]) => told(out).flatMap((e) => (e.kind === 'hit' ? [e] : []));
+    const pool = hits(lateOut);
+    for (const h of hits(onTimeOut)) {
+      const i = pool.findIndex((l) => l.side === h.side && l.tick <= h.tick && l.tick > h.tick - REWIND_TICKS);
+      expect(i, `hit by Side ${h.side} on Tick ${h.tick}`).toBeGreaterThanOrEqual(0);
+      pool.splice(i, 1);
+    }
+    expect(pool.length).toBeLessThan(hits(onTimeOut).length / 50);
+    const keys = told(lateOut).map((e) => `${e.kind}:${'side' in e ? e.side : ''}:${e.tick}`);
+    expect(new Set(keys).size).toBe(keys.length);
   });
 
   it('drops what a Player sent for later Ticks when they disconnect, so their Side fades to a stop', () => {
@@ -187,6 +315,18 @@ describe('the Court Match', () => {
     m.receive(0, input(2, RIGHT));
     m.advance(4);
     expect(m.state).toEqual(reference(Array.from({ length: 4 }, () => [ZERO, ZERO])));
+  });
+
+  it('keeps a gone Side still from when it first went, however often the Court says so, across a rewind', () => {
+    const m = court();
+    m.receive(0, input(0, ...Array.from({ length: 10 }, () => RIGHT)));
+    m.advance(10);
+    m.gone(0);
+    m.advance(5);
+    m.gone(0);
+    m.receive(1, input(5, RIGHT));
+    m.advance(1);
+    expect([...m.byTick].filter(([t]) => t >= 10).every(([, [a]]) => a.move.x === 0)).toBe(true);
   });
 
   it('collects every event since the previous Snapshot, each with its Tick', () => {
@@ -235,7 +375,7 @@ describe('the Court Match', () => {
     const events: SnapEvent[] = snaps(a.out, 0).flatMap((s) => s.events);
     expect(events.filter((e) => e.kind === 'match')).toEqual([expect.objectContaining({ winner })]);
     expect(events.filter((e) => e.kind === 'rally-won').length).toBe(a.m.state.match.points[0] + a.m.state.match.points[1]);
-    expect(events.map((e) => e.tick)).toEqual([...events.map((e) => e.tick)].sort((x, y) => x - y));
+    for (const s of snaps(a.out, 0)) expect(s.events.map((e) => e.tick)).toEqual([...s.events.map((e) => e.tick)].sort((x, y) => x - y));
 
     // Nothing more once it's over, but a Player who reloads still gets the end.
     expect(a.m.advance(10)).toEqual([]);

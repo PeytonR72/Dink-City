@@ -39,9 +39,8 @@ describe('the netcode harness', () => {
       h.run(30_000);
       for (const { pressed, applied } of settled(h)) {
         expect(pressed.length).toBeGreaterThan(10);
-        // Each press lands once, in order, on its own Tick or a later one.
-        expect(applied.map((p) => p.shot)).toEqual(pressed.map((p) => p.shot));
-        applied.forEach((p, i) => expect(p.tick).toBeGreaterThanOrEqual(pressed[i]!.tick));
+        // Each press lands once, on its own Tick.
+        expect(applied).toEqual(pressed);
       }
       // The lead covers the jitter: nearly every Intent arrives before its Tick.
       expect(onTime(h, 0)).toBeGreaterThan(0.98);
@@ -55,8 +54,22 @@ describe('the netcode harness', () => {
     h.run(30_000);
     for (const { pressed, applied } of settled(h)) {
       expect(pressed.length).toBeGreaterThan(10);
-      expect(applied.map((p) => p.shot)).toEqual(pressed.map((p) => p.shot));
+      expect(applied).toEqual(pressed);
     }
+  });
+
+  it('rewinds for Intents a stalled link delivers late, so every one still lands on its Tick', () => {
+    // A 200 ms freeze every 2.5 s holds the client's input up to 12 Ticks, past its lead of about 6.
+    const up: LinkSpec = { ...LOSSY, stall: { every: 2_500, ms: 200 } };
+    const h = createHarness({ seed: 10, up, down: LOSSY });
+    h.run(30_000);
+    expect(h.resteps).toBeGreaterThan(50);
+    for (const { pressed, applied } of settled(h)) {
+      expect(pressed.length).toBeGreaterThan(10);
+      expect(applied).toEqual(pressed);
+    }
+    expect(onTime(h, 0)).toBe(1);
+    expect(onTime(h, 1)).toBe(1);
   });
 
   it("knows the Court's Tick within a Tick a second in, and leads by a half round trip plus margin", () => {

@@ -28,11 +28,16 @@ import { createTickLoop, type TickLoop } from '../../party/src/tickLoop';
 
 const TICK_MS = TICK * 1000;
 
-/** One direction of the link: each packet takes `latency` plus up to `jitter` ms, or is lost with odds `loss`. */
+/**
+ * One direction of the link: each packet takes `latency` plus up to `jitter` ms, or is lost with odds `loss`. With
+ * `stall`, the link also freezes for `ms` out of every `every` ms, as a WebSocket does behind a lost segment: packets
+ * sent meanwhile wait and go out together when it clears.
+ */
 export interface LinkSpec {
   latency: number;
   jitter: number;
   loss: number;
+  stall?: { every: number; ms: number };
 }
 
 /** Decides a client's Intent for a Tick it stamps, from the latest Snapshot it has. */
@@ -78,10 +83,12 @@ export interface Harness {
   /** The Court's Tick at this instant, fractional: what a pong would say. */
   courtTick(): number;
   readonly clients: [FakeClient, FakeClient];
-  /** Each Side's Intents as the Court stepped them, by Tick. */
+  /** Each Side's Intents as the Court last stepped them, by Tick: a rewind's re-steps replace what came before. */
   readonly applied: [Map<number, Intent>, Map<number, Intent>];
-  /** Each Side's shot presses as the Court stepped them. */
+  /** Each Side's shot presses as the Court last stepped them, in Tick order. */
   readonly appliedPresses: [Press[], Press[]];
+  /** How many steps re-stepped a Tick for a rewind. */
+  readonly resteps: number;
   /** Runs `ms` of virtual time, calling `each` at every client frame. */
   run(ms: number, each?: () => void): void;
 }
@@ -112,17 +119,18 @@ export function createHarness(opts: HarnessOptions): Harness {
   };
 
   const applied: Harness['applied'] = [new Map(), new Map()];
-  const appliedPresses: Harness['appliedPresses'] = [[], []];
+  let resteps = 0;
+  const presses = (side: SideIndex): Press[] =>
+    // A re-step keeps its Tick's place in the map, so this is in Tick order.
+    [...applied[side]].flatMap(([tick, i]) => (i.shot ? [{ tick, shot: i.shot }] : []));
   const match = createCourtMatch({
     seed: matchSeed,
     preset,
     tuning: simTuning,
     onStep(tick, intents) {
-      for (const side of [0, 1] as const) {
-        applied[side].set(tick, intents[side]);
-        const shot = intents[side].shot;
-        if (shot) appliedPresses[side].push({ tick, shot });
-      }
+      if (applied[0].has(tick)) resteps++;
+      applied[0].set(tick, intents[0]);
+      applied[1].set(tick, intents[1]);
     },
   });
   const loop: TickLoop = createTickLoop({ hz: 60, maxCatchUp: 8 });
@@ -133,7 +141,10 @@ export function createHarness(opts: HarnessOptions): Harness {
   const send = <T>(link: LinkSpec, msg: ClientMsg | CourtMsg, guard: (v: unknown) => v is T, deliver: (m: T) => void) => {
     if (rng() < link.loss) return;
     const wire = encode(msg);
-    at(now + link.latency + rng() * link.jitter, () => {
+    const { stall } = link;
+    const into = stall ? now % stall.every : 0;
+    const leaves = stall && into < stall.ms ? now - into + stall.ms : now;
+    at(leaves + link.latency + rng() * link.jitter, () => {
       const m = decode(wire);
       if (guard(m)) deliver(m);
     });
@@ -211,7 +222,12 @@ export function createHarness(opts: HarnessOptions): Harness {
     courtTick,
     clients,
     applied,
-    appliedPresses,
+    get appliedPresses(): [Press[], Press[]] {
+      return [presses(0), presses(1)];
+    },
+    get resteps() {
+      return resteps;
+    },
     run(ms, cb) {
       each = cb;
       const end = now + ms;
