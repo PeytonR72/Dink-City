@@ -1,8 +1,9 @@
-// An online Match: the Court steps the Sim, and this screen sends its Player's Intents and draws the Court's
-// Snapshots a little in the past. Until prediction (issue 09) that Interpolated timeline draws both Players and the
-// ball, not just the remote Player, so the local Player feels a round trip late. No Fault Replay, no hit-stop, and Game
-// speed is always 1: none of them may bend the Court's clock (ADR-0004).
-import { quantizeIntent, type InMsg, type SnapEvent } from '../net';
+// An online Match: the Court steps the Sim, and this screen sends its Player's Intents, stamped ahead of the Court's
+// clock so they arrive before their Tick is stepped, and draws the Court's Snapshots a little in the past. Until
+// prediction (issue 09) that Interpolated timeline draws both Players and the ball, not just the remote Player, so the
+// local Player feels a round trip late. No Fault Replay, no hit-stop, and Game speed is always 1: none of them may bend
+// the Court's clock (ADR-0004).
+import { createClockSync, createInputStream, inputFrame, type ClientMsg, type PongMsg, type SnapEvent } from '../net';
 import { TICK, type Intent, type SideIndex, type SimState } from '../sim';
 import type { MatchDriver, MatchView } from './driver';
 
@@ -19,9 +20,11 @@ export interface OnlineMatchOptions {
   /** The Match's first state, from `start`: drawn until the first Snapshot. */
   start: SimState;
   view: MatchView;
-  /** Samples the local Player's Intent, once per Tick of this screen's clock. */
+  /** Samples the local Player's Intent, once per Tick stamped. */
   input: () => Intent;
-  send: (msg: InMsg) => void;
+  send: (msg: ClientMsg) => void;
+  /** This screen's clock, ms. `performance.now` unless a test fakes it. */
+  now?: () => number;
 }
 
 /** A Snapshot waiting to be drawn, with its events not yet told to the view. */
@@ -41,13 +44,21 @@ export class OnlineMatch implements MatchDriver {
   private snaps: Buffered[] = [];
   /** The Tick drawn, fractional. It runs at 1 Tick per Tick of real time, eased toward 100 ms behind the newest. */
   private drawTick = 0;
-  private acc = 0;
-  /** The Tick label of the last Intent sent. Issue 07 replaces it with a synced clock. */
-  private inputTick = 0;
+  /** The Court's clock as this screen knows it, and the Intents it hasn't acknowledged. */
+  private sync = createClockSync();
+  private stream = createInputStream();
+  private now: () => number;
 
   constructor(private opts: OnlineMatchOptions) {
     this.local = opts.local;
     this.prev = this.curr = opts.start;
+    this.now = opts.now ?? (() => performance.now());
+  }
+
+  /** The link as this screen measures it: round trip and jitter (ms), and the input lead and backlog (Ticks). */
+  get net() {
+    const { sync, stream } = this;
+    return { rtt: sync.rtt, jitter: sync.jitter, lead: sync.lead, courtTick: sync.courtTick(this.now()), unacked: stream.unacked };
   }
 
   /** The newest Snapshot's state: the Match as the Court last told it. */
@@ -56,20 +67,21 @@ export class OnlineMatch implements MatchDriver {
   }
 
   /** A Snapshot from the Court. One older than the newest is dropped. */
-  receive(snap: { tick: number; state: SimState; events: SnapEvent[] }) {
+  receive(snap: { tick: number; ack: number; state: SimState; events: SnapEvent[] }) {
+    this.stream.ack(snap.ack);
     const newest = this.snaps.at(-1);
     if (newest && snap.tick <= newest.tick) return;
     if (!newest) this.drawTick = snap.tick - INTERP_DELAY_TICKS;
     this.snaps.push({ tick: snap.tick, state: snap.state, events: snap.events.slice() });
-    this.inputTick = Math.max(this.inputTick, snap.tick);
+  }
+
+  /** The Court's answer to a ping. */
+  pong(msg: PongMsg) {
+    this.sync.pong(msg, this.now());
   }
 
   frame(dt: number) {
-    this.acc += dt;
-    while (this.acc >= TICK) {
-      this.acc -= TICK;
-      this.opts.send({ t: 'in', tick: ++this.inputTick, intent: quantizeIntent(this.opts.input()) });
-    }
+    this.sendInput();
 
     const { view } = this.opts;
     const newest = this.snaps.at(-1);
@@ -88,6 +100,12 @@ export class OnlineMatch implements MatchDriver {
     this.prev = a.state;
     this.curr = b.state;
     view.draw(a.state, b.state, b === a ? 1 : (this.drawTick - a.tick) / (b.tick - a.tick), b.state, dt);
+  }
+
+  /** Pings when one is due and sends the input due, until the Match is over (`inputFrame`). */
+  private sendInput() {
+    if (this.latest.phase === 'over') return;
+    for (const msg of inputFrame(this.sync, this.stream, this.now(), () => this.opts.input())) this.opts.send(msg);
   }
 
   /** Tells the view each event whose Tick is now drawn, once, with the Snapshot it came in. */

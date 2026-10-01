@@ -47,4 +47,17 @@ describe('the tick loop', () => {
     expect(loop.advance(T0 - 500)).toBe(0);
     expect(loop.advance(T0 - 483)).toBe(1);
   });
+
+  it('tells how far its clock is into the Ticks not yet run, for a pong between callbacks', () => {
+    const loop = createTickLoop({ hz: 60, maxCatchUp: 8 });
+    expect(loop.phase(T0)).toBe(0);
+    loop.advance(T0);
+    loop.advance(T0 + 20);
+    // 20 ms is 1.2 Ticks: 1 ran, 0.2 is left over; 5 ms later it's 0.5.
+    expect(loop.phase(T0 + 20)).toBeCloseTo(0.2, 9);
+    expect(loop.phase(T0 + 25)).toBeCloseTo(0.5, 9);
+    // A late callback's backlog counts, up to what the next callback would run.
+    expect(loop.phase(T0 + 70)).toBeCloseTo(3.2, 9);
+    expect(loop.phase(T0 + 5_000)).toBe(8);
+  });
 });

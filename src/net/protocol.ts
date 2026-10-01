@@ -4,7 +4,7 @@ import { isQIntent, type QIntent } from './intentCodec';
 import { isPresetId, type PresetId } from './presets';
 
 /** Bump when a message changes shape. The handshake refuses a mismatch with `version`. */
-export const PROTOCOL_VERSION = 3;
+export const PROTOCOL_VERSION = 4;
 
 /**
  * Why the Court refused or dropped a client. Every code but `bad_message` closes the socket. `host_left`: the Host
@@ -39,15 +39,37 @@ export interface ReadyMsg {
   t: 'ready';
 }
 
-/** The client's Intent, labeled with its Tick. The Court acknowledges the latest `tick` in each Snapshot. */
+/** An `in` carries at most this many Ticks of Intents: usually about 15, more to hold on to a shot press. */
+export const MAX_IN_INTENTS = 30;
+
+/**
+ * The client's Intents for the Ticks `from`, `from + 1`, …: every one the Court hasn't acknowledged yet, so a lost
+ * packet costs nothing. The Court steps Tick T with the Intent labeled T, and acknowledges the last Tick up to which
+ * it has them all in each Snapshot's `ack`.
+ */
 export interface InMsg {
   t: 'in';
-  tick: number;
-  intent: QIntent;
+  from: number;
+  intents: QIntent[];
+}
+
+/** A clock sample: the Court answers at once with `pong`, echoing `id` and `clientTime` (the client's clock, ms). */
+export interface PingMsg {
+  t: 'ping';
+  id: number;
+  clientTime: number;
+}
+
+/** The Court's answer to a `ping`. */
+export interface PongMsg {
+  t: 'pong';
+  id: number;
+  clientTime: number;
+  courtTick: number;
 }
 
 /** Client → Court. */
-export type ClientMsg = HelloMsg | ReadyMsg | InMsg;
+export type ClientMsg = HelloMsg | ReadyMsg | InMsg | PingMsg;
 
 /** A Sim event in a Snapshot, labeled with the Tick whose step emitted it. */
 export type SnapEvent = SimEvent & { tick: number };
@@ -56,15 +78,17 @@ export type SnapEvent = SimEvent & { tick: number };
  * Court → client. `welcome` seats the client on `side`; keep `token` to reclaim the seat after a reload. `start`
  * is sent to both when the Match begins, and again after the `welcome` of a Player who reloads mid-Match; its
  * `players` names both, since the Host's `welcome` came before the Guest was seated. A `snap`
- * carries the full state, the latest input Tick received from this client (`ack`, -1 before any), and every event
- * since the previous `snap`.
+ * carries the full state, the last Tick up to which the Court has every Intent from this client (`ack`, -1 before
+ * any), and every event since the previous `snap`. `pong` answers a `ping` with the Court's Tick when it was sent,
+ * fractional: the Ticks stepped plus how far the Court's clock is into the next.
  */
 export type CourtMsg =
   | { t: 'welcome'; side: SideIndex; token: string; preset: PresetId; players: [CourtPlayer | null, CourtPlayer | null] }
   | { t: 'error'; code: CourtErrorCode }
   | { t: 'start'; seed: number; preset: PresetId; players: [CourtPlayer | null, CourtPlayer | null] }
   | { t: 'snap'; tick: number; ack: number; state: SimState; events: SnapEvent[] }
-  | { t: 'over'; winner: SideIndex };
+  | { t: 'over'; winner: SideIndex }
+  | PongMsg;
 
 /** An open Court as the Lobby lists it. Full Courts aren't listed, so `players` is always 1. */
 export interface LobbyCourt {
@@ -111,11 +135,25 @@ export function isReady(v: unknown): v is ReadyMsg {
   return isTagged(v) && v.t === 'ready';
 }
 
-/** Guards an `in` from the wire: a whole Tick and a well-formed quantized Intent. */
+/** Guards an `in` from the wire: a whole first Tick and 1 to `MAX_IN_INTENTS` well-formed quantized Intents. */
 export function isIn(v: unknown): v is InMsg {
   if (!isTagged(v) || v.t !== 'in') return false;
   const m = v as Record<string, unknown>;
-  return Number.isSafeInteger(m.tick) && (m.tick as number) >= 0 && isQIntent(m.intent);
+  return (
+    Number.isSafeInteger(m.from) &&
+    (m.from as number) >= 0 &&
+    Array.isArray(m.intents) &&
+    m.intents.length >= 1 &&
+    m.intents.length <= MAX_IN_INTENTS &&
+    m.intents.every(isQIntent)
+  );
+}
+
+/** Guards a `ping` from the wire. */
+export function isPing(v: unknown): v is PingMsg {
+  if (!isTagged(v) || v.t !== 'ping') return false;
+  const m = v as Record<string, unknown>;
+  return Number.isSafeInteger(m.id) && Number.isFinite(m.clientTime);
 }
 
 /**
@@ -136,6 +174,8 @@ export function isCourtMsg(v: unknown): v is CourtMsg {
       return Number.isSafeInteger(m.tick) && Number.isSafeInteger(m.ack) && typeof m.state === 'object' && m.state !== null && Array.isArray(m.events);
     case 'over':
       return isSide(m.winner);
+    case 'pong':
+      return Number.isSafeInteger(m.id) && Number.isFinite(m.clientTime) && Number.isFinite(m.courtTick);
   }
   return false;
 }

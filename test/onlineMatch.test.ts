@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { InMsg, SnapEvent } from '../src/net';
+import type { ClientMsg, InMsg, PingMsg, SnapEvent } from '../src/net';
 import type { MatchView } from '../src/match/driver';
 import { INTERP_DELAY_TICKS, OnlineMatch } from '../src/match/online';
 import { localView } from '../src/render/localView';
@@ -15,7 +15,9 @@ function at(tick: number): SimState {
 
 /** An online Match with a fake connection and view, logging what the view is told. */
 function online(local: SideIndex = 0, input: () => Intent = idle) {
-  const sent: InMsg[] = [];
+  const sent: ClientMsg[] = [];
+  /** This screen's clock, ms: one Tick per Tick-long frame. */
+  let clock = 0;
   const told: { tick: number; events: string[] }[] = [];
   const drawn: { prev: number; curr: number; alpha: number; live: number }[] = [];
   const view: MatchView = {
@@ -28,13 +30,24 @@ function online(local: SideIndex = 0, input: () => Intent = idle) {
     },
     draw: (prev, curr, alpha, live) => drawn.push({ prev: prev.tick, curr: curr.tick, alpha, live: live.tick }),
   };
-  const match = new OnlineMatch({ local, start: at(0), view, input, send: (m) => sent.push(m) });
-  const snap = (tick: number, events: SnapEvent[] = []) => match.receive({ tick, state: at(tick), events });
+  const match = new OnlineMatch({ local, start: at(0), view, input, send: (m) => sent.push(m), now: () => clock });
+  const snap = (tick: number, events: SnapEvent[] = [], ack = -1) => match.receive({ tick, ack, state: at(tick), events });
+  /** A frame of `dt` seconds. */
+  const frame = (dt: number) => {
+    clock += dt * 1000;
+    match.frame(dt);
+  };
   /** Frames adding up to `ticks` Ticks. */
   const frames = (ticks: number) => {
-    for (let i = 0; i < ticks; i++) match.frame(TICK);
+    for (let i = 0; i < ticks; i++) frame(TICK);
   };
-  return { match, sent, told, drawn, snap, frames, last: () => drawn[drawn.length - 1]! };
+  /** Answers the last ping as a Court on Tick `courtTick` would, over a link with no delay. */
+  const pong = (courtTick: number) => {
+    const ping = sent.filter((m): m is PingMsg => m.t === 'ping').at(-1)!;
+    match.pong({ t: 'pong', id: ping.id, clientTime: ping.clientTime, courtTick });
+  };
+  const ins = () => sent.filter((m): m is InMsg => m.t === 'in');
+  return { match, sent, ins, told, drawn, snap, frame, frames, pong, last: () => drawn[drawn.length - 1]! };
 }
 
 function idle(): Intent {
@@ -66,28 +79,50 @@ describe('OnlineMatch', () => {
     expect(match.curr.tick).toBe(0);
   });
 
-  it('sends one quantized Intent per Tick of its own clock, labeled with rising Ticks', () => {
-    let n = 0;
-    const { match, sent } = online(0, () => ({ move: { x: 1, y: -1 }, aim: { x: 0.5, y: 0 }, shot: n++ === 1 ? 'drive' : null }));
-    match.frame(TICK * 2.5);
-    match.frame(TICK * 0.6);
-    expect(sent.map((m) => m.t)).toEqual(['in', 'in', 'in']);
-    expect(sent.map((m) => m.intent)).toEqual([
-      [127, -127, 64, 0, 0],
-      [127, -127, 64, 0, 2],
-      [127, -127, 64, 0, 0],
-    ]);
-    expect(sent.map((m) => m.tick)).toEqual([1, 2, 3]);
+  it("pings the Court, and sends no input until it knows the Court's clock", () => {
+    const { sent, frames } = online();
+    frames(3);
+    expect(sent).toEqual([{ t: 'ping', id: 1, clientTime: 1000 / 60 }]);
   });
 
-  it('labels its Intents from the newest Snapshot on, never going back', () => {
-    const { match, sent, snap } = online();
-    snap(40);
-    match.frame(TICK);
-    snap(42);
-    match.frame(TICK);
-    match.frame(TICK);
-    expect(sent.map((m) => m.tick)).toEqual([41, 43, 44]);
+  it("stamps one quantized Intent per Tick of the Court's clock, a Tick ahead on a perfect link", () => {
+    let n = 0;
+    const { match, ins, frame, pong } = online(0, () => ({ move: { x: 1, y: -1 }, aim: { x: 0.5, y: 0 }, shot: n++ === 1 ? 'drive' : null }));
+    frame(TICK);
+    pong(100);
+    expect(match.net.lead).toBe(1);
+    // The Court is on 102.5, then 103.1: Ticks 104 and 105 are stamped, and the second message resends 104.
+    frame(TICK * 2.5);
+    frame(TICK * 0.6);
+    expect(ins()).toEqual([
+      { t: 'in', from: 104, intents: [[127, -127, 64, 0, 0]] },
+      { t: 'in', from: 104, intents: [[127, -127, 64, 0, 0], [127, -127, 64, 0, 2]] },
+    ]);
+  });
+
+  it('resends what the Court has not acknowledged, and drops what it has', () => {
+    const { ins, frame, frames, pong, snap } = online();
+    frame(TICK);
+    // Half a Tick off the frames, so no input Tick lands on a rounding edge.
+    pong(0.5);
+    frames(5);
+    expect(ins().at(-1)).toMatchObject({ from: 3, intents: { length: 5 } });
+    snap(2, [], 5);
+    frames(1);
+    expect(ins().at(-1)).toMatchObject({ from: 6, intents: { length: 3 } });
+  });
+
+  it('stops sending once a Snapshot says the Match is over', () => {
+    const { match, sent, frame, frames, pong } = online();
+    frame(TICK);
+    pong(0.5);
+    frames(3);
+    const over = at(4);
+    over.phase = 'over';
+    match.receive({ tick: 4, ack: -1, state: over, events: [] });
+    const before = sent.length;
+    frames(120);
+    expect(sent.length).toBe(before);
   });
 
   it('draws about 100 ms behind the newest Snapshot, between the two around that time', () => {

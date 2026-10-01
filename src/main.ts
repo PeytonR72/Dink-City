@@ -6,6 +6,7 @@ import { Hud } from './hud/hud';
 import { Input } from './input/input';
 import type { MatchDriver, MatchView } from './match/driver';
 import { LocalMatch } from './match/local';
+import type { OnlineMatch } from './match/online';
 import { Locker } from './menu/locker';
 import { CityMap } from './menu/map';
 import { Overlay, SettingsPanel } from './menu/menu';
@@ -379,6 +380,7 @@ async function goOnline(name: string, target: { preset: PresetId } | { code: str
         hud.reset();
         setMode('match');
       } else if (msg.t === 'snap') online?.receive(msg);
+      else if (msg.t === 'pong') online?.pong(msg);
       else if (msg.t === 'error') fail(COURT_ERRORS[msg.code]);
     },
     onClose(closeCode, reason) {
@@ -465,9 +467,9 @@ if (import.meta.env.DEV && params.has('debug')) {
   get practice() {
     return match === offline ? offline.practice : null;
   },
-  /** Online only: the Side this screen plays, or null offline. */
+  /** Online only: the Side this screen plays and the link as it measures it (`OnlineMatch.net`), or null offline. */
   get online() {
-    return match === offline ? null : { side: match.local };
+    return match === offline ? null : { side: match.local, net: (match as OnlineMatch).net };
   },
   get drive() {
     return drive;

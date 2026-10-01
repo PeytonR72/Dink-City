@@ -5,7 +5,7 @@ import { quantizeIntent, type CourtMsg, type InMsg, type QIntent, type SnapEvent
 import { PRESETS } from '../../src/net/presets';
 import { createInitialState, step, type Intent, type SideIndex } from '../../src/sim';
 import { simTuning } from '../../src/tuning';
-import { createCourtMatch, type Outgoing } from '../../party/src/courtMatch';
+import { DECAY_TICKS, MAX_AHEAD_TICKS, createCourtMatch, type Outgoing } from '../../party/src/courtMatch';
 
 // A whole Match headlessly takes a few seconds.
 vi.setConfig({ testTimeout: 60_000 });
@@ -13,12 +13,16 @@ vi.setConfig({ testTimeout: 60_000 });
 const SEED = 4242;
 const ZERO: Intent = { move: { x: 0, y: 0 }, aim: { x: 0, y: 0 }, shot: null };
 
+/** A Court Match that logs the Intents it steps each Tick with. */
 function court() {
-  return createCourtMatch({ seed: SEED, preset: 'quick', tuning: simTuning });
+  const stepped: [number, Intent, Intent][] = [];
+  const m = createCourtMatch({ seed: SEED, preset: 'quick', tuning: simTuning, onStep: (tick, [a, b]) => stepped.push([tick, a, b]) });
+  return Object.assign(m, { stepped });
 }
 
-function input(tick: number, intent: Intent): InMsg {
-  return { t: 'in', tick, intent: quantizeIntent(intent) };
+/** An `in` with Intents for the Ticks from `from` on. */
+function input(from: number, ...intents: Intent[]): InMsg {
+  return { t: 'in', from, intents: intents.map(quantizeIntent) };
 }
 
 function snaps(out: Outgoing[], side: SideIndex) {
@@ -46,16 +50,37 @@ describe('the Court Match', () => {
     expect(m.state).toEqual(reference(Array.from({ length: 10 }, () => [ZERO, ZERO])));
   });
 
-  it('keeps the latest move and aim for every Tick until the next input', () => {
+  it('steps each Tick with the Intent labeled for it, however early it came', () => {
+    const m = court();
+    m.receive(0, input(0, RIGHT, ZERO, RIGHT));
+    m.receive(1, input(2, RIGHT));
+    m.advance(3);
+    expect(m.state).toEqual(reference([[RIGHT, ZERO], [ZERO, ZERO], [RIGHT, RIGHT]]));
+  });
+
+  it('repeats the last move and aim on a Tick with no Intent, fading the move to nothing', () => {
+    const m = court();
+    const aimed: Intent = { move: { x: 1, y: 0 }, aim: { x: 0, y: 1 }, shot: null };
+    m.receive(0, input(0, aimed));
+    m.advance(DECAY_TICKS + 3);
+    expect(m.stepped.map(([, a]) => +a.move.x.toFixed(3))).toEqual([1, 1, 0.833, 0.667, 0.5, 0.333, 0.167, 0, 0]);
+    expect(m.stepped.every(([, a]) => a.aim.y === 1 && a.shot === null && !a.contact)).toBe(true);
+    // A Side that never sent anything stands still.
+    expect(m.stepped.every(([, , b]) => b.move.x === 0 && b.move.y === 0)).toBe(true);
+  });
+
+  it('starts the fade over when Intents come again', () => {
     const m = court();
     m.receive(0, input(0, RIGHT));
     m.advance(5);
-    expect(m.state).toEqual(reference(Array.from({ length: 5 }, () => [RIGHT, ZERO])));
+    m.receive(0, input(5, RIGHT));
+    m.advance(2);
+    expect(m.stepped.map(([, a]) => +a.move.x.toFixed(3))).toEqual([1, 1, 0.833, 0.667, 0.5, 1, 1]);
   });
 
   it('sends a Snapshot to each Side every 2 Ticks, with its own ack', () => {
     const m = court();
-    m.receive(1, input(7, ZERO));
+    m.receive(1, input(6, ZERO, ZERO));
     const out = [1, 2, 3, 4].flatMap(() => m.advance(1));
     expect(snaps(out, 0).map((s) => [s.tick, s.ack])).toEqual([[2, -1], [4, -1]]);
     expect(snaps(out, 1).map((s) => [s.tick, s.ack])).toEqual([[2, 7], [4, 7]]);
@@ -77,37 +102,89 @@ describe('the Court Match', () => {
     expect(snaps(m.advance(1), 0).map((s) => s.tick)).toEqual([10]);
   });
 
-  it('latches a shot pressed between Ticks and uses it on the next step only', () => {
+  it('acknowledges the last Tick up to which it has every Intent', () => {
     const m = court();
-    // Wait out the serve delay, then press once. The Host serves first.
+    const ack = () => snaps(m.advance(2), 0).at(-1)!.ack;
+    m.receive(0, input(0, ZERO, ZERO, ZERO));
+    expect(ack()).toBe(2);
+    // A resend overlapping what arrived adds the rest.
+    m.receive(0, input(1, ZERO, ZERO, ZERO, ZERO, ZERO));
+    expect(ack()).toBe(5);
+    // A run starting past the next Tick means the client gave up the ones between.
+    m.receive(0, input(9, ZERO));
+    expect(ack()).toBe(9);
+  });
+
+  it('applies each Intent once, however often it is resent', () => {
+    const m = court();
     m.advance(120);
-    const pairs: [Intent, Intent][] = Array.from({ length: 120 }, () => [ZERO, ZERO]);
-    m.receive(0, input(120, { ...ZERO, shot: 'drive' }));
-    // A move after the press doesn't drop it.
-    m.receive(0, input(121, ZERO));
+    const press = { ...ZERO, shot: 'drive' as const };
+    m.receive(0, input(120, press));
+    m.receive(0, input(120, press, ZERO));
+    m.advance(1);
+    m.receive(0, input(120, press, ZERO, ZERO));
     m.advance(3);
-    pairs.push([{ ...ZERO, shot: 'drive' }, ZERO], [ZERO, ZERO], [ZERO, ZERO]);
-    expect(m.state).toEqual(reference(pairs));
+    expect(m.stepped.filter(([, a]) => a.shot !== null).map(([t]) => t)).toEqual([120]);
+  });
+
+  it(`refuses Intents more than ${MAX_AHEAD_TICKS} Ticks ahead`, () => {
+    const m = court();
+    m.receive(0, input(MAX_AHEAD_TICKS - 1, RIGHT, RIGHT, RIGHT));
+    m.receive(1, input(MAX_AHEAD_TICKS + 1, RIGHT));
+    expect(m.current(0)[0]).toMatchObject({ ack: MAX_AHEAD_TICKS });
+    expect(m.current(1)[0]).toMatchObject({ ack: -1 });
+  });
+
+  it('drops a late Intent but applies its shot press on the next Tick', () => {
+    const m = court();
+    m.advance(120);
+    m.receive(0, input(118, RIGHT, { ...RIGHT, shot: 'drive' }, RIGHT));
+    m.advance(2);
+    // Ticks 118 and 119 were stepped before they came: the move is lost, the press lands on 120 with 120's move.
+    expect(m.stepped.slice(-2).map(([t, a]) => [t, a.move.x, a.shot])).toEqual([
+      [120, 1, 'drive'],
+      [121, 1, null],
+    ]);
     expect(m.state.phase).toBe('rally');
   });
 
-  it('drops a latched shot when the Player disconnects, but keeps their move', () => {
+  it('keeps a late press for the Tick after when that Tick has a press of its own', () => {
     const m = court();
     m.advance(120);
-    m.receive(0, input(120, { ...RIGHT, shot: 'drive' }));
-    m.disconnect(0);
+    m.receive(0, input(119, { ...ZERO, shot: 'lob' }, { ...ZERO, shot: 'soft' }));
     m.advance(2);
-    const pairs: [Intent, Intent][] = Array.from({ length: 120 }, () => [ZERO, ZERO]);
-    pairs.push([RIGHT, ZERO], [RIGHT, ZERO]);
-    expect(m.state).toEqual(reference(pairs));
+    expect(m.stepped.slice(-2).map(([, a]) => a.shot)).toEqual(['lob', 'soft']);
+  });
+
+  it('drops what a Player sent for later Ticks when they disconnect, so their Side fades to a stop', () => {
+    const m = court();
+    m.advance(120);
+    m.receive(0, input(120, RIGHT, RIGHT, { ...RIGHT, shot: 'drive' }, RIGHT));
+    m.advance(2);
+    m.disconnect(0);
+    m.advance(DECAY_TICKS + 1);
+    const after = m.stepped.slice(122);
+    expect(after.every(([, a]) => a.shot === null)).toBe(true);
+    expect(after.map(([, a]) => +a.move.x.toFixed(3))).toEqual([1, 0.833, 0.667, 0.5, 0.333, 0.167, 0]);
     expect(m.state.phase).toBe('serve');
+  });
+
+  it("takes a reconnected Player's Intents from wherever their new client starts", () => {
+    const m = court();
+    m.receive(0, input(0, ZERO, ZERO, ZERO, ZERO, ZERO, ZERO));
+    m.advance(2);
+    m.disconnect(0);
+    m.receive(0, input(3, RIGHT));
+    m.advance(2);
+    expect(m.stepped.map(([, a]) => a.move.x)).toEqual([0, 0, 0, 1]);
+    expect(m.current(0)[0]).toMatchObject({ ack: 3 });
   });
 
   it('stands a gone Side still and ignores its input from then on', () => {
     const m = court();
-    m.receive(0, input(0, RIGHT));
+    m.receive(0, input(0, RIGHT, RIGHT));
     m.gone(0);
-    m.receive(0, input(1, RIGHT));
+    m.receive(0, input(2, RIGHT));
     m.advance(4);
     expect(m.state).toEqual(reference(Array.from({ length: 4 }, () => [ZERO, ZERO])));
   });
@@ -133,8 +210,8 @@ describe('the Court Match', () => {
       while (!m.over && m.state.tick < 60 * 60 * 30) {
         const q = [0, 1].map((side) => quantizeIntent(bots[side]!.think(observe(m.state, side as SideIndex)))) as [QIntent, QIntent];
         inputs.push(q);
-        m.receive(0, { t: 'in', tick: m.state.tick, intent: q[0] });
-        m.receive(1, { t: 'in', tick: m.state.tick, intent: q[1] });
+        m.receive(0, { t: 'in', from: m.state.tick, intents: [q[0]] });
+        m.receive(1, { t: 'in', from: m.state.tick, intents: [q[1]] });
         out.push(...m.advance(1));
       }
       return { m, out, inputs };

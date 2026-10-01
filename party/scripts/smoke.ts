@@ -4,8 +4,20 @@
 // to aim it elsewhere.
 import { DIFFICULTY, createBot, type Bot } from '../../src/bot/bot';
 import { observe } from '../../src/bot/observe';
-import { PROTOCOL_VERSION, decode, encode, quantizeIntent, simHash, type CourtMsg, type HelloMsg, type LobbyCourt, type LobbyMsg } from '../../src/net';
-import type { Intent, SideIndex, SimState } from '../../src/sim';
+import {
+  PROTOCOL_VERSION,
+  createClockSync,
+  createInputStream,
+  decode,
+  encode,
+  inputFrame,
+  simHash,
+  type CourtMsg,
+  type HelloMsg,
+  type LobbyCourt,
+  type LobbyMsg,
+} from '../../src/net';
+import { TICK, type SideIndex, type SimState } from '../../src/sim';
 import { simTuning } from '../../src/tuning';
 
 const args = process.argv.slice(2);
@@ -126,39 +138,50 @@ interface Played {
   snaps: number;
   /** Snapshots that arrived after `over`, so far: there should be none. */
   late: () => number;
+  /** The round trip (ms) and input lead (Ticks) at the end. */
+  net: { rtt: number; lead: number };
 }
 
 /**
- * Plays one Side with an easy Bot on the latest Snapshot. Snapshots come every 2 Ticks, but the Bot must think exactly
- * once per Tick (it serves on an exact Tick), so it thinks for each Tick since the last Snapshot, on that Snapshot's
- * state. A shot from any of those thoughts goes out with the last one's move and aim; the Court latches it.
+ * Plays one Side with an easy Bot on the latest Snapshot, the way `OnlineMatch` sends input: it syncs to the Court's
+ * clock with pings, and every frame stamps an Intent for each Tick up to its input Tick, resending the unacknowledged.
+ * The Bot thinks once per Tick stamped (it serves on an exact Tick), told that Tick, on the latest Snapshot's state.
  */
 function botSide(c: Client, onSnap: (s: SimState) => void): Promise<Played> {
   if (c.first.t !== 'welcome') throw new Error(`not seated: ${JSON.stringify(c.first)}`);
   const side = c.first.side;
+  const sync = createClockSync();
+  const stream = createInputStream();
   let bot: Bot | null = null;
-  let thought = 0;
+  let frames: ReturnType<typeof setInterval> | undefined;
   let snaps = 0;
   let late = 0;
   let state: SimState | null = null;
+  const frame = () => {
+    if (bot === null || state === null) return;
+    const [b, s] = [bot, state];
+    for (const msg of inputFrame(sync, stream, performance.now(), (tick) => b.think({ ...observe(s, side), tick }))) c.ws.send(encode(msg));
+  };
   return new Promise((resolve, reject) => {
-    c.ws.addEventListener('close', (e) => reject(new Error(`Side ${side} closed: ${e.code} ${e.reason}`)));
+    c.ws.addEventListener('close', (e) => {
+      clearInterval(frames);
+      reject(new Error(`Side ${side} closed: ${e.code} ${e.reason}`));
+    });
     c.onMessage = (msg) => {
-      if (msg.t === 'start') bot = createBot(side, msg.seed + 1 + side, DIFFICULTY.easy, simTuning);
-      else if (msg.t === 'snap' && bot !== null) {
+      if (msg.t === 'start') {
+        bot = createBot(side, msg.seed + 1 + side, DIFFICULTY.easy, simTuning);
+        frames = setInterval(frame, TICK * 1000);
+      } else if (msg.t === 'pong') sync.pong(msg, performance.now());
+      else if (msg.t === 'snap') {
         if (state?.phase === 'over') late++;
         snaps++;
         state = msg.state;
+        stream.ack(msg.ack);
         onSnap(state);
-        let intent: Intent | null = null;
-        let shot: Intent['shot'] = null;
-        for (let k = thought + 1; k <= msg.tick; k++) {
-          intent = bot.think({ ...observe(msg.state, side), tick: k });
-          shot ??= intent.shot;
-        }
-        thought = msg.tick;
-        if (intent !== null) c.ws.send(encode({ t: 'in', tick: msg.tick, intent: quantizeIntent({ ...intent, shot }) }));
-      } else if (msg.t === 'over' && state !== null) resolve({ state, winner: msg.winner, snaps, late: () => late });
+      } else if (msg.t === 'over' && state !== null) {
+        clearInterval(frames);
+        resolve({ state, winner: msg.winner, snaps, late: () => late, net: { rtt: sync.rtt, lead: sync.lead } });
+      }
     };
     c.ws.send(encode({ t: 'ready' }));
   });
@@ -188,6 +211,7 @@ async function match(): Promise<void> {
     await new Promise((r) => setTimeout(r, 1_000));
     check('no Snapshot comes after over', a.late() + b.late() === 0, a.late() + b.late());
     console.log(`Side ${a.winner} won ${a.state.match.points.join('-')} at Tick ${a.state.tick}, ${a.snaps} Snapshots, ${wall} s wall time`);
+    console.log(`     round trip ${a.net.rtt.toFixed(1)} ms, input lead ${a.net.lead.toFixed(2)} Ticks`);
   } finally {
     clearTimeout(giveUp);
     clearInterval(progress);

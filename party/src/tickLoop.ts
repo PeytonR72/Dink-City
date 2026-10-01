@@ -5,6 +5,8 @@
 export interface TickLoop {
   /** The Ticks to run now. The first call only sets the clock and returns 0. */
   advance(now: number): number;
+  /** How many Ticks' worth of time at `now` hasn't run yet, fractional, up to what the next callback would run. */
+  phase(now: number): number;
 }
 
 /**
@@ -30,6 +32,10 @@ export function createTickLoop(opts: { hz: number; maxCatchUp: number }): TickLo
       }
       acc -= due * 1000;
       return due;
+    },
+    phase(now) {
+      if (last === null) return 0;
+      return Math.min(opts.maxCatchUp, (acc + Math.max(0, now - last) * opts.hz) / 1000);
     },
   };
 }

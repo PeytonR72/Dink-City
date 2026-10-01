@@ -29,6 +29,11 @@ export function dequantizeIntent(q: QIntent): Intent {
   return intent;
 }
 
+/** True if the quantized Intent presses a shot button. */
+export function hasShot(q: QIntent): boolean {
+  return (q[4] & 3) !== 0;
+}
+
 /** Guards a quantized Intent from the wire: four int8 axes and the shot and `contact` bits. */
 export function isQIntent(v: unknown): v is QIntent {
   if (!Array.isArray(v) || v.length !== 5 || !v.every((n) => Number.isInteger(n))) return false;

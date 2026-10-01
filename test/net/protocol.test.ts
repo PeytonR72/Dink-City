@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { PROTOCOL_VERSION, decode, encode, isCourtMsg, isHello, isIn, isLobbyMsg, isReady, type CourtMsg, type LobbyMsg } from '../../src/net';
+import { MAX_IN_INTENTS, PROTOCOL_VERSION, decode, encode, isCourtMsg, isHello, isIn, isLobbyMsg, isPing, isReady, type CourtMsg, type LobbyMsg } from '../../src/net';
 import { createInitialState } from '../../src/sim';
 
 const hello = { t: 'hello', name: 'Pat', protocolVersion: PROTOCOL_VERSION, simHash: '0123abcd' };
@@ -41,26 +41,37 @@ describe('the Court protocol', () => {
   });
 
   it('guards an in', () => {
-    expect(isIn({ t: 'in', tick: 0, intent: [0, 0, 0, 0, 0] })).toBe(true);
-    expect(isIn({ t: 'in', tick: 1234, intent: [127, -127, 64, -1, 7] })).toBe(true);
+    expect(isIn({ t: 'in', from: 0, intents: [[0, 0, 0, 0, 0]] })).toBe(true);
+    expect(isIn({ t: 'in', from: 1234, intents: [[127, -127, 64, -1, 7], [0, 0, 0, 0, 0]] })).toBe(true);
+    expect(isIn({ t: 'in', from: 9, intents: Array.from({ length: MAX_IN_INTENTS }, () => [0, 0, 0, 0, 1]) })).toBe(true);
   });
 
-  it('refuses an in with a bad Tick or a malformed Intent', () => {
+  it('refuses an in with a bad first Tick, too few or too many Intents, or a malformed one', () => {
+    const ok = [0, 0, 0, 0, 0];
     const bad: unknown[] = [
-      { t: 'in', tick: -1, intent: [0, 0, 0, 0, 0] },
-      { t: 'in', tick: 1.5, intent: [0, 0, 0, 0, 0] },
-      { t: 'in', tick: '3', intent: [0, 0, 0, 0, 0] },
-      { t: 'in', tick: 3 },
-      { t: 'in', tick: 3, intent: [0, 0, 0, 0] },
-      { t: 'in', tick: 3, intent: [0, 0, 0, 0, 0, 0] },
-      { t: 'in', tick: 3, intent: [128, 0, 0, 0, 0] },
-      { t: 'in', tick: 3, intent: [0, 0, 0.5, 0, 0] },
-      { t: 'in', tick: 3, intent: [0, 0, 0, 0, 8] },
-      { t: 'in', tick: 3, intent: [0, 0, 0, 0, -1] },
-      { t: 'in', tick: 3, intent: [0, 0, 0, '0', 0] },
-      { t: 'in', tick: 3, intent: { 0: 0, 1: 0, 2: 0, 3: 0, 4: 0, length: 5 } },
+      { t: 'in', from: -1, intents: [ok] },
+      { t: 'in', from: 1.5, intents: [ok] },
+      { t: 'in', from: '3', intents: [ok] },
+      { t: 'in', from: 3 },
+      { t: 'in', from: 3, intents: [] },
+      { t: 'in', from: 3, intents: Array.from({ length: MAX_IN_INTENTS + 1 }, () => ok) },
+      { t: 'in', from: 3, intents: ok },
+      { t: 'in', from: 3, intents: [[0, 0, 0, 0]] },
+      { t: 'in', from: 3, intents: [ok, [0, 0, 0, 0, 0, 0]] },
+      { t: 'in', from: 3, intents: [[128, 0, 0, 0, 0]] },
+      { t: 'in', from: 3, intents: [[0, 0, 0.5, 0, 0]] },
+      { t: 'in', from: 3, intents: [[0, 0, 0, 0, 8]] },
+      { t: 'in', from: 3, intents: [[0, 0, 0, 0, -1]] },
+      { t: 'in', from: 3, intents: [[0, 0, 0, '0', 0]] },
+      { t: 'in', from: 3, intents: [{ 0: 0, 1: 0, 2: 0, 3: 0, 4: 0, length: 5 }] },
     ];
     for (const msg of bad) expect(isIn(msg), JSON.stringify(msg)).toBe(false);
+  });
+
+  it('guards a ping', () => {
+    expect(isPing({ t: 'ping', id: 3, clientTime: 1234.5 })).toBe(true);
+    for (const msg of [{ t: 'ping', id: 1.5, clientTime: 0 }, { t: 'ping', id: 1 }, { t: 'ping', id: 1, clientTime: 'x' }, { t: 'in', id: 1, clientTime: 0 }])
+      expect(isPing(msg), JSON.stringify(msg)).toBe(false);
   });
 
   it('guards every Court message', () => {
@@ -72,6 +83,7 @@ describe('the Court protocol', () => {
       { t: 'start', seed: 7, preset: 'long', players: [{ name: 'A', connected: true }, { name: 'B', connected: false }] },
       { t: 'snap', tick: 4, ack: -1, state: createInitialState(1), events: [{ kind: 'match', winner: 1, tick: 3 }] },
       { t: 'over', winner: 0 },
+      { t: 'pong', id: 2, clientTime: 1000.25, courtTick: 412.5 },
     ];
     for (const msg of good) expect(isCourtMsg(decode(encode(msg))), msg.t).toBe(true);
 
@@ -89,6 +101,8 @@ describe('the Court protocol', () => {
       { t: 'snap', tick: 4, ack: -1, state: {}, events: {} },
       { t: 'snap', tick: '4', ack: -1, state: {}, events: [] },
       { t: 'over', winner: -1 },
+      { t: 'pong', id: 2, clientTime: 1000 },
+      { t: 'pong', id: 2, clientTime: 1000, courtTick: null },
     ];
     for (const msg of bad) expect(isCourtMsg(msg), JSON.stringify(msg)).toBe(false);
   });

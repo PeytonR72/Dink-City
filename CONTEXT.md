@@ -70,6 +70,7 @@ The physical playing area. For the online room, see **Court** under Online play.
 - **Preset**: a Court's fixed rules, picked at creation: **Quick** (1 Game, Rally scoring), **Standard** (1 Game, Side-out scoring) or **Long** (best of 3, Side-out scoring).
 - **Display name**: a guest name kept on the client and validated by the server. There are no accounts.
 - **Snapshot**: the Court's full `SimState`, sent 30 times a second.
+- **Input lead**: how many Ticks ahead of the Court's clock a client labels its Intents (about half the round trip plus a jitter margin), so each arrives before its Tick is stepped. The client learns the Court's clock from pings.
 - **Predicted timeline**: a client's own run of the Sim, ahead of the Court, for its own Player and the ball. It is reconciled on every Snapshot.
 - **Interpolated timeline**: Snapshots drawn a little in the past, used for the remote Player.
 - **Reported Contact**: online, a human Player's client flags the Tick of Contact in its Intent (`contact`), and the Court checks reach and the rules before the Sim computes the shot. Offline, the Sim finds Contact itself (`contactMode: 'auto'`).

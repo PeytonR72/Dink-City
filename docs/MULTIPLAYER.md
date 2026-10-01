@@ -296,7 +296,7 @@ browser (menu) ──WebSocket──▶ Lobby (singleton "global")      list of 
 - **Control messages:** JSON, poker-style `{ t: ... }` unions in `src/net/protocol.ts` (Lobby and Court messages), re-guarded on the server.
 - **Client → Court input:** each packet carries `{ t: 'in', from, intents[] }`, the last N un-acknowledged Ticks, quantized. Sent every frame.
 - **Court → client snapshot:** `{ t: 'snap', tick, ack, state }` at 30 Hz.
-  - `ack` is the last input Tick received from that client.
+  - `ack` is the last input Tick up to which the Court has every Intent from that client.
   - `state` is the full `SimState` (about 600 bytes of JSON, about 18 KB/s), including the opponent's Commit (Decision 4).
   - Deltas or binary come later, and only if measurements say so.
 - **Handshake:** `hello { name, token?, protocolVersion, simHash }`, where `simHash` is a hash of the `simTuning` JSON plus a build Sim version constant. A mismatch returns `version`, and the client says "Please reload for the latest version."

@@ -6,6 +6,7 @@ import {
   encode,
   isHello,
   isIn,
+  isPing,
   isPresetId,
   isReady,
   simHash,
@@ -14,6 +15,7 @@ import {
   type CourtMsg,
   type HelloMsg,
   type InMsg,
+  type PingMsg,
   type PresetId,
 } from '../../src/net';
 import { TICK, type SideIndex } from '../../src/sim';
@@ -95,6 +97,7 @@ export class Court extends Server<Env> {
     if (msg !== null && isHello(msg)) return this.hello(conn, msg);
     if (msg !== null && isReady(msg)) return this.ready(conn);
     if (msg !== null && isIn(msg)) return this.input(conn, msg);
+    if (msg !== null && isPing(msg)) return this.ping(conn, msg);
     this.send(conn, { t: 'error', code: 'bad_message' });
   }
 
@@ -149,6 +152,16 @@ export class Court extends Server<Env> {
   private input(conn: Connection, msg: InMsg): void {
     const side = this.sideOf(conn);
     if (side !== null) this.match?.receive(side, msg);
+  }
+
+  /**
+   * A clock sample, answered at once. The Court's Tick is fractional: the Ticks stepped plus the time its clock has run
+   * since, which a message handler can read because the clock moves between I/O events.
+   */
+  private ping(conn: Connection, msg: PingMsg): void {
+    if (this.sideOf(conn) === null || this.match === null || this.loop === null) return;
+    const phase = this.match.over ? 0 : this.loop.phase(Date.now());
+    this.send(conn, { t: 'pong', id: msg.id, clientTime: msg.clientTime, courtTick: this.match.state.tick + phase });
   }
 
   /** The Side of an open, seated connection. Messages from anything else, such as a socket that's closing, are ignored. */
