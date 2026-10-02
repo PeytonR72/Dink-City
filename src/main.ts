@@ -78,9 +78,9 @@ const view: MatchView = {
     renderer.cut();
   },
   replayed: showSwingsAndSounds,
-  draw(prev, curr, alpha, live, dt) {
+  draw(prev, curr, alpha, live, dt, clock) {
     hud.update(live, dt);
-    renderer.render(prev, curr, alpha, dt);
+    renderer.render(prev, curr, alpha, dt, clock);
   },
 };
 /** The offline Match or Practice, against the Venue's Bot or the ball machine. */
@@ -468,9 +468,14 @@ if (import.meta.env.DEV && params.has('debug')) {
   get practice() {
     return match === offline ? offline.practice : null;
   },
-  /** Online only: the Side this screen plays and the link as it measures it (`OnlineMatch.net`), or null offline. */
+  /**
+   * Online only: the Side this screen plays, the link as it measures it (`OnlineMatch.net`), and the Tick each Player
+   * and the ball were last drawn at (`OnlineMatch.clock`); null offline.
+   */
   get online() {
-    return match === offline ? null : { side: match.local, net: (match as OnlineMatch).net };
+    if (match === offline) return null;
+    const online = match as OnlineMatch;
+    return { side: match.local, net: online.net, clock: online.clock };
   },
   get drive() {
     return drive;

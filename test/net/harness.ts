@@ -4,9 +4,12 @@
 import { DIFFICULTY, createBot } from '../../src/bot/bot';
 import { observe } from '../../src/bot/observe';
 import {
+  composeView,
   createClockSync,
   createInputStream,
+  createInterpolator,
   createPredictor,
+  extendTrack,
   decode,
   inputFrame,
   encode,
@@ -14,10 +17,13 @@ import {
   isIn,
   isPing,
   onlineConfig,
+  type BallClock,
   type ClientMsg,
   type ClockSync,
+  type Clocks,
   type CourtMsg,
   type InputStream,
+  type Interpolator,
   type Predictor,
   type PresetId,
   type SnapEvent,
@@ -40,6 +46,13 @@ export interface LinkSpec {
   jitter: number;
   loss: number;
   stall?: { every: number; ms: number };
+}
+
+/** A frame as a client drew it: the Tick each thing was drawn at. */
+export interface DrawnFrame {
+  /** Virtual time, ms. */
+  at: number;
+  clock: Clocks;
 }
 
 /** Decides a client's Intent for a Tick it stamps, from the latest Snapshot it has. */
@@ -85,8 +98,12 @@ export interface FakeClient {
   readonly predictedBall: Map<number, Vec3>;
   /** How far each Snapshot moved the predicted local Player (m, ground plane), in order. */
   readonly corrections: number[];
-  /** Every event the client told its view, from its prediction or the Court, in order. */
-  readonly heard: SnapEvent[];
+  /** The Interpolated timeline, fed and run as `OnlineMatch` does. */
+  readonly interp: Interpolator;
+  /** Every frame drawn, composed as `OnlineMatch` does. */
+  readonly drawn: DrawnFrame[];
+  /** Every event the client told its view, from its prediction or the Court, in order, with the frame's time (ms). */
+  readonly heard: (SnapEvent & { at: number })[];
   /** A stopped client runs no frames: no pings, no input. It still receives. */
   stopped: boolean;
 }
@@ -189,13 +206,21 @@ export function createHarness(opts: HarnessOptions): Harness {
         // Snapshots can pass each other on this network; an older one is stale.
         if (m.tick <= c.latest.tick) return;
         c.latest = m.state;
-        const { correction, told } = c.predictor.reconcile(m);
+        const { correction, told, court } = c.predictor.reconcile(m);
         c.corrections.push(Math.hypot(correction.x, correction.z));
         hear(c, told);
+        hear(c, c.interp.push(m.state, court));
+        retrack(c);
       } else if (m.t === 'pong') c.sync.pong(m, c.clock());
     });
 
   const start = createInitialState(matchSeed, onlineConfig(preset));
+  /** Each client's track for the ball (every Tick known) and its ball clock, as `OnlineMatch` keeps them. */
+  const tracks = new Map<SideIndex, { track: SimState[]; ball: BallClock | null }>();
+  const retrack = (c: FakeClient) => {
+    const t = tracks.get(c.side)!;
+    t.track = extendTrack(t.track, c.predictor.states, c.interp.clock - 30);
+  };
   const client = (side: SideIndex, skew: number): FakeClient => ({
     side,
     sync: createClockSync(),
@@ -208,17 +233,20 @@ export function createHarness(opts: HarnessOptions): Harness {
     predicted: new Map(),
     predictedBall: new Map(),
     corrections: [],
+    interp: createInterpolator(start),
+    drawn: [],
     heard: [],
     stopped: false,
   });
   const clients: [FakeClient, FakeClient] = [client(0, 123_456.7), client(1, -4_321.2)];
+  for (const c of clients) tracks.set(c.side, { track: [start], ball: null });
   const drives = clients.map((c): Drive => {
     const bot = createBot(c.side, matchSeed + 1 + c.side, DIFFICULTY.easy, simTuning);
     return opts.drive?.[c.side] ?? ((tick, latest) => bot.think({ ...observe(latest, c.side), tick }));
   });
 
   const hear = (c: FakeClient, told: Told[]) => {
-    for (const t of told) c.heard.push(...t.events);
+    for (const t of told) c.heard.push(...t.events.map((e) => ({ ...e, at: now })));
   };
   let each: (() => void) | undefined;
   /** One client frame, sending input as `OnlineMatch` does. */
@@ -239,6 +267,20 @@ export function createHarness(opts: HarnessOptions): Harness {
       return intent;
     });
     for (const msg of msgs) toCourt(c.side, msg);
+    retrack(c);
+
+    // Draws the frame, as `OnlineMatch.frame` does.
+    hear(c, c.interp.advance(TICK));
+    const { prev, curr } = c.predictor;
+    const courtNow = c.sync.courtTick(c.clock());
+    const alpha = courtNow === null || prev === curr ? 1 : Math.min(1, Math.max(0, courtNow + c.sync.lead - prev.tick + 1));
+    const t = tracks.get(c.side)!;
+    const view = composeView(
+      { local: c.side, now: prev.tick + alpha * (curr.tick - prev.tick), remote: c.interp.clock, track: t.track, snaps: c.interp.states },
+      t.ball,
+    );
+    t.ball = view.ball;
+    c.drawn.push({ at: now, clock: view.clock });
   };
 
   // The Court's interval fires on whole milliseconds, like a Worker's; the clients' frames at 60 Hz, a little apart.

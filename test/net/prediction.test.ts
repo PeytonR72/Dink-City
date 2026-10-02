@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { DIFFICULTY, createBot } from '../../src/bot/bot';
 import { observe } from '../../src/bot/observe';
-import { MAX_PREDICT_TICKS, createPredictor, dequantizeIntent, fadeIntent, onlineConfig, quantizeIntent, type QIntent, type SnapEvent, type Told } from '../../src/net';
+import { SAME_EVENT_TICKS, MAX_PREDICT_TICKS, createPredictor, dequantizeIntent, fadeIntent, onlineConfig, quantizeIntent, type QIntent, type SnapEvent, type Told } from '../../src/net';
 import { autoContact, createInitialState, step, type Intent, type SideIndex, type SimState } from '../../src/sim';
 import { simTuning } from '../../src/tuning';
 
@@ -101,16 +101,30 @@ describe('the predictor', () => {
     expect(p.curr.tick).toBe(MAX_PREDICT_TICKS + 101);
   });
 
-  it('tells the Court events once each, the outcomes always and the predictable ones unless already told', () => {
+  it("hands on the Court's events it doesn't predict, and tells a predictable one it missed, once", () => {
     const p = createPredictor({ local: 0, start: START, tuning: simTuning });
     const net: SnapEvent = { kind: 'net', pos: { x: 0, y: 0.5, z: 0 }, cord: false, tick: 3 };
     const dead: SnapEvent = { kind: 'dead', reason: 'net', loser: 0, tick: 3 };
     const remoteHit: SnapEvent = { kind: 'hit', side: 1, type: 'drive', variant: 'drive', quality: 1, speed: 10, pos: { x: 0, y: 1, z: -6 }, tick: 2 } as SnapEvent;
     const court = run(START, [[STILL, STILL], [STILL, STILL], [STILL, STILL]]);
     const first = p.reconcile({ state: court, last: [Q_STILL, Q_STILL], events: [remoteHit, net, dead] });
-    expect(first.told).toEqual([{ state: court, events: [remoteHit, net, dead] }]);
-    // The same net again (a Snapshot resent after a reload, say) isn't told twice.
+    expect(first.told).toEqual([{ state: court, events: [net] }]);
+    expect(first.court).toEqual([remoteHit, dead]);
+    // The same net again (a Snapshot resent after a reload, say) isn't told twice, nor one a few Ticks off.
     expect(p.reconcile({ state: court, last: [Q_STILL, Q_STILL], events: [net] }).told).toEqual([]);
+    expect(p.reconcile({ state: court, last: [Q_STILL, Q_STILL], events: [{ ...net, tick: 3 + SAME_EVENT_TICKS }] }).told).toEqual([]);
+    expect(p.reconcile({ state: court, last: [Q_STILL, Q_STILL], events: [{ ...net, tick: 4 + SAME_EVENT_TICKS }] }).told).toHaveLength(1);
+  });
+
+  it('keeps every predicted state from the last Snapshot on, one per Tick', () => {
+    const p = createPredictor({ local: 0, start: START, tuning: simTuning });
+    for (let t = 0; t < 6; t++) p.stamp(t, RIGHT);
+    expect(p.states.map((s) => s.tick)).toEqual([0, 1, 2, 3, 4, 5, 6]);
+    expect(p.states.at(-1)).toBe(p.curr);
+    const court = run(START, [[RIGHT, STILL], [RIGHT, STILL]]);
+    p.reconcile({ state: court, last: [quantizeIntent(RIGHT), Q_STILL], events: [] });
+    expect(p.states.map((s) => s.tick)).toEqual([2, 3, 4, 5, 6]);
+    expect(p.states[0]).toBe(court);
   });
 });
 
@@ -239,7 +253,10 @@ describe('the predictor over a Bot Match', () => {
       if (tick < end) hear(p.stamp(tick, sampled(pairs[tick]![local])).told, c);
       const s = c - DELAY;
       if (s > 0 && s <= end && s % 2 === 0) {
-        hear(p.reconcile({ state: states[s]!, last: lastOf(pairs[s - 1]!), events: eventsOf(states.slice(snapped + 1, s + 1)) }).told, c);
+        const { told, court } = p.reconcile({ state: states[s]!, last: lastOf(pairs[s - 1]!), events: eventsOf(states.slice(snapped + 1, s + 1)) });
+        hear(told, c);
+        // The Court's own events, as they come.
+        hear([{ state: states[s]!, events: court }], c);
         snapped = s;
       }
     }

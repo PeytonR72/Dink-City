@@ -219,9 +219,19 @@ The Court is authoritative. It runs the existing `step` at 60 Hz with the existi
 - **Interpolated timeline (remote)** is drawn about 100 ms behind the newest snapshot. The remote Player is drawn only from here, so remote swings come from confirmed hits.
 - **Ball clock blend (presentation only):**
   - The ball's path since its last launch is a known function of Tick. Draw it at a time that slides from *local now* (ball on or heading to the local half) to *remote interpolated time* (ball on or leaving the remote half).
-  - A remote hit then lines up with the remote swing, and the ball arrives in local time for the local Contact. The ball appears slightly faster or slower in flight (about 10–15% at 100–150 ms) instead of teleporting.
+  - A remote hit then lines up with the remote swing, and the ball arrives in local time for the local Contact. The ball appears faster coming in and slower going out instead of teleporting. With 100 ms of interpolation the timelines are about 18 Ticks apart at 150 ms, so a 1 s flight runs about 40% fast or 25% slow.
   - Cap the blend. Past about 250 ms of latency, accept small snaps.
-- **Events:** local `hit`, local-half `bounce` and net events play immediately from prediction. Faults, `dead`, `rally-won`, scores, `game` and `match` come **only from the Court** (a predicted "opponent missed" is often wrong). The Fault banner shows, with no Replay.
+  - As built (`src/net/composeView.ts`): the composed view takes the local Player from the Predicted timeline, the remote Player from the Snapshots, and the ball from a track of every Tick known (the Snapshots, and the prediction from the newest on), so no re-stepping is needed; a frame costs about 5 µs.
+    - The ball's lag behind local now changes linearly in time over each flight: the whole gap (capped at 24 Ticks, about 250 ms of round trip) when the remote swing is drawn, none when the local Player meets it. When it's met is read from the track once local now has passed it, or reckoned from the ball's speed.
+    - The ball runs at a quarter to four times speed. A ball returned faster than that can catch up with (a flight shorter than about 4/3 of the gap: a smash, a volley exchange at the net) jumps to the local racket as the local Player hits it. The hitter's view wins.
+    - The renderer times each Player's swing on their own clock and the wind-up from the ball's.
+- **Events:**
+  - Local `hit`, local-half `bounce` and `net` play immediately from prediction.
+  - Remote hits and remote-half bounces play when the Interpolated timeline draws them, so the sound comes with the remote swing.
+  - Faults, `dead`, `rally-won`, scores, `game` and `match` come **only from the Court** (a predicted "opponent missed" is often wrong). They play as their Snapshot arrives: the Court holds them back by the Rewind window, so they're final, and late enough that the ball is drawn past them. Any event still waiting from before an outcome plays first. The Fault banner shows, with no Replay.
+  - Nothing plays twice: an event of the same kind and hitter within 4 Ticks of one already played stands for it, so a re-simulation or a rewind moving it a Tick doesn't repeat its sound.
+  - A predicted local hit the Court rejected (its report came past the Rewind window) is corrected by the next Snapshot: the ball snaps to where the Court has it, and the swing isn't heard again.
+  - The Match is over on screen only when a Snapshot says so.
 
 ### Hitter-reported hits (Reported Contact)
 
@@ -395,7 +405,7 @@ Issues: 07 (clock sync, redundant inputs, jitter buffer, netcode harness), 08 (R
 
 Exit: movement feels local at 150 ms RTT (checked with dev-tools throttling), and the harness is green.
 
-### Phase 4: Hitter-reported hits, remote interpolation, ball clock blend
+### Phase 4: Hitter-reported hits, remote interpolation, ball clock blend ✅
 
 Issues: 10 (Reported Contact online), 11 (remote interpolation, ball clock blend, event policy).
 
@@ -406,6 +416,8 @@ Issues: 10 (Reported Contact online), 11 (remote interpolation, ball clock blend
 - Harness tests: a late hit report is accepted within the window and rejected past it; a forged out-of-reach report is rejected; both clients converge to the Court's state.
 
 Exit: rallies at 150 ms RTT feel like single-player for the hitter, remote swings line up with the ball, and there are no ghost points.
+
+Checked by the agent in Playwright at about 165 ms round trip (issue 11's comment); the user's check by hand is still to come.
 
 ### Phase 5: Online Match flow
 

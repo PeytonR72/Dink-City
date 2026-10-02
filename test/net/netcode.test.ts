@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { DECAY_TICKS } from '../../src/net';
+import { DECAY_TICKS, SAME_EVENT_TICKS, isOutcome } from '../../src/net';
 import { SNAP_DISTANCE } from '../../src/match/online';
 import type { SnapEvent } from '../../src/net';
 import type { Intent, SideIndex } from '../../src/sim';
@@ -57,6 +57,29 @@ function walk(period: number) {
 }
 
 const eventKey = (e: SnapEvent) => `${e.tick} ${e.kind} ${e.kind === 'hit' ? e.side : ''}`;
+/** What an event is, but for its Tick: its kind, and the hitter's Side. */
+const kindOf = (e: SnapEvent) => `${e.kind} ${e.kind === 'hit' ? e.side : ''}`;
+
+/**
+ * The events heard that stand for no event the Court sent: each heard one is matched to a Court one of the same kind
+ * within `SAME_EVENT_TICKS`, each Court one used once. So an event heard twice, or one the Court never had, is left over.
+ */
+function unmatched(heard: SnapEvent[], court: SnapEvent[]): SnapEvent[] {
+  const used = new Set<number>();
+  return heard.filter((e) => {
+    const i = court.findIndex((x, j) => !used.has(j) && kindOf(x) === kindOf(e) && Math.abs(x.tick - e.tick) <= SAME_EVENT_TICKS);
+    if (i >= 0) used.add(i);
+    return i < 0;
+  });
+}
+
+/** Heard events that repeat one heard before: the same kind within `SAME_EVENT_TICKS`. */
+const repeats = (heard: SnapEvent[]) => heard.filter((e, i) => heard.slice(0, i).some((x) => kindOf(x) === kindOf(e) && Math.abs(x.tick - e.tick) <= SAME_EVENT_TICKS));
+
+/** How many frames after a clock passes Tick `tick` a client's drawn ball passes it. */
+function framesApart(c: FakeClient, clock: (sides: [number, number]) => number, tick: number) {
+  return c.drawn.findIndex((d) => d.clock.ball >= tick) - c.drawn.findIndex((d) => clock(d.clock.sides) >= tick);
+}
 
 /** Float noise: the client and the Court run the same steps, so their states should agree to the last bit. */
 const NOISE = 1e-9;
@@ -138,6 +161,9 @@ describe('the netcode harness', () => {
       expect(confirmed.every((t) => reported.includes(t))).toBe(true);
       rejected += reported.filter((t) => !confirmed.includes(t)).length;
       expect(new Set(c.heard.map(eventKey)).size).toBe(c.heard.length);
+      // Not even a Tick or two off, and no outcome heard that the Court didn't have.
+      expect(repeats(c.heard)).toEqual([]);
+      expect(unmatched(c.heard.filter(isOutcome), h.courtEvents)).toEqual([]);
     }
     expect(rejected).toBeGreaterThan(2);
   });
@@ -246,4 +272,45 @@ describe('the netcode harness', () => {
     h.run(1_000);
     expect(pos()).toEqual(before);
   });
+});
+
+describe('the composed view and the event policy', () => {
+  for (const seed of [1, 2, 3]) {
+    it(`draws each hit on its hitter's clock, and hears each event once, outcomes only as the Court has them (seed ${seed})`, () => {
+      const h = createHarness({ seed, up: LOSSY, down: LOSSY });
+      h.run(60_000);
+      const end = h.match.state.tick - 60;
+      const court = h.courtEvents.filter((e) => e.tick <= end);
+      for (const c of h.clients) {
+        const remote = (1 - c.side) as SideIndex;
+        const heard = c.heard.filter((e) => e.tick <= end);
+        expect(heard.length).toBeGreaterThan(80);
+        // Every event heard is one the Court had, heard once: no event plays twice, and none is a ghost.
+        expect(unmatched(heard, court)).toEqual([]);
+        // The outcomes are the Court's exactly, Tick and all, so none is ever shown and then taken back.
+        const outcomes = heard.filter(isOutcome);
+        expect(outcomes.length).toBeGreaterThan(2);
+        expect(outcomes.every((e) => court.some((x) => eventKey(x) === eventKey(e)))).toBe(true);
+
+        // The remote Player's hits are heard as the Interpolated timeline draws them: on the frame its clock passes.
+        const remoteHits = heard.filter((e) => e.kind === 'hit' && e.side === remote);
+        expect(remoteHits.length).toBeGreaterThan(2);
+        for (const e of remoteHits) {
+          const frame = c.drawn.find((d) => d.at === e.at)!;
+          expect(frame.clock.sides[remote]).toBeGreaterThanOrEqual(e.tick);
+          expect(frame.clock.sides[remote]).toBeLessThan(e.tick + 2);
+        }
+
+        // The ball meets every local hit on local time, on the very frame. It leaves the remote racket on the remote
+        // swing, give or take a frame, but for the odd ball returned too fast to catch up with, which leaves early.
+        const rally = court.flatMap((e) => (e.kind === 'hit' && e.variant !== 'serve' && e.tick > 200 ? [e] : []));
+        const local = rally.filter((e) => e.side === c.side).map((e) => framesApart(c, (s) => s[c.side], e.tick));
+        const far = rally.filter((e) => e.side === remote).map((e) => framesApart(c, (s) => s[remote], e.tick));
+        expect(local.length).toBeGreaterThan(2);
+        expect(local.every((n) => n === 0)).toBe(true);
+        expect(far.every((n) => n <= 1)).toBe(true);
+        expect(far.filter((n) => Math.abs(n) <= 1).length).toBeGreaterThanOrEqual(far.length * 0.75);
+      }
+    });
+  }
 });

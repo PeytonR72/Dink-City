@@ -1,4 +1,5 @@
 // The seam between main.ts and whatever runs the Match: offline (LocalMatch) or, later, online.
+import type { Clocks } from '../net';
 import type { SideIndex, SimEvent, SimState } from '../sim';
 
 /**
@@ -12,8 +13,11 @@ export interface MatchView {
   replay(on: boolean): void;
   /** Events of replayed Ticks: swings and sounds only, never the score. */
   replayed(s: SimState, events: readonly SimEvent[]): void;
-  /** Draws a frame between `prev` and `curr`. `live` is the Match state to score from (not the Replay's). */
-  draw(prev: SimState, curr: SimState, alpha: number, live: SimState, dt: number): void;
+  /**
+   * Draws a frame between `prev` and `curr`. `live` is the Match state to score from (not the Replay's). Online,
+   * `clock` is the Tick each Player and the ball are drawn at, each on its own timeline.
+   */
+  draw(prev: SimState, curr: SimState, alpha: number, live: SimState, dt: number, clock?: Clocks): void;
 }
 
 /** Runs a Match, one frame at a time. */

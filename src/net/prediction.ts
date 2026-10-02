@@ -9,6 +9,11 @@ import type { SnapEvent, SnapMsg } from './protocol';
 export const MAX_PREDICT_TICKS = 60;
 /** Events told are remembered this many Ticks behind the newest Snapshot, long enough for the Court's copy to come. */
 const TOLD_TICKS = 60;
+/**
+ * An event of the same kind (and hitter) told this many Ticks either side stands for it: a re-simulation can move a
+ * predicted bounce a Tick, and the Court's copy can land on another Tick after a rewind. No Player hits twice so soon.
+ */
+export const SAME_EVENT_TICKS = 4;
 
 /** Events to show, with the state they came in. */
 export interface Told {
@@ -27,14 +32,21 @@ export interface Stamped {
 export interface Reconciled {
   /** How far the local Player's predicted position moved, ground plane (m). */
   correction: { x: number; z: number };
-  /** What to show now: the Snapshot's events this screen hasn't told already, then any the re-simulation newly made. */
+  /**
+   * What to show now: the Snapshot's predictable events this screen hasn't told already (the prediction missed them),
+   * then any the re-simulation newly made.
+   */
   told: Told[];
+  /** The Snapshot's events this screen doesn't predict, for the Interpolated timeline to tell. */
+  court: SnapEvent[];
 }
 
 export interface Predictor {
   /** The predicted states either side of the newest predicted Tick. */
   readonly prev: SimState;
   readonly curr: SimState;
+  /** Every predicted state from the last Snapshot's on, one per Tick, `curr` last. */
+  readonly states: readonly SimState[];
   /** The guess at the remote Player's Intent: their last one the Court stepped, with no shot and no Contact. */
   readonly guess: Intent;
   /**
@@ -60,8 +72,9 @@ export interface Predictor {
  * calls no hits. The remote Player is guessed to call their hits the same way.
  *
  * Events: the local Player's `hit`, a `bounce` on the local half and `net` are told from the prediction the moment
- * they're predicted; every other event, the outcomes and the Fault included, only from the Court. Events are keyed by
- * Tick, kind and Side, so the Court's copy of one already told, or a re-simulation making it again, is not told twice.
+ * they're predicted; every other event, the outcomes and the Fault included, only from the Court, and the
+ * Interpolated timeline decides when. Events are matched by kind and hitter within `SAME_EVENT_TICKS`, so the Court's copy
+ * of one already told, or a re-simulation making it again, is not told twice, even a Tick or two off.
  */
 export function createPredictor(opts: { local: SideIndex; start: SimState; tuning: SimTuning }): Predictor {
   const { local, tuning } = opts;
@@ -73,8 +86,10 @@ export function createPredictor(opts: { local: SideIndex; start: SimState; tunin
   let guess = stillIntent();
   /** The local Intents stamped, quantized, by Tick: from the newest before the last Snapshot's state on. */
   const stamped = new Map<number, Intent>();
-  /** Keys of the predictable events told, with their Ticks. */
-  const toldKeys = new Map<string, number>();
+  /** The predictable events told: kind and hitter, and Tick. */
+  let toldKeys: { key: string; tick: number }[] = [];
+  /** The prediction's states from the base on. */
+  let states: SimState[] = [opts.start];
 
   /** The local Intent for Tick `tick`: the one stamped, or the Court's fade from the last one before. */
   const localAt = (tick: number): Intent => {
@@ -89,11 +104,11 @@ export function createPredictor(opts: { local: SideIndex; start: SimState; tunin
   const predictable = (e: SnapEvent, s: SimState) =>
     e.kind === 'net' || (e.kind === 'hit' && e.side === local) || (e.kind === 'bounce' && endOfZ(e.pos.z) === endOf(s, local));
 
-  /** Marks `e` told, returning false if it already was. */
+  /** Marks `e` told, returning false if it, or a like event within `SAME_EVENT_TICKS`, already was. */
   const tell = (e: SnapEvent) => {
-    const key = `${e.tick} ${e.kind} ${e.kind === 'hit' ? e.side : ''}`;
-    if (toldKeys.has(key)) return false;
-    toldKeys.set(key, e.tick);
+    const key = `${e.kind} ${e.kind === 'hit' ? e.side : ''}`;
+    if (toldKeys.some((t) => t.key === key && Math.abs(t.tick - e.tick) <= SAME_EVENT_TICKS)) return false;
+    toldKeys.push({ key, tick: e.tick });
     return true;
   };
 
@@ -120,6 +135,7 @@ export function createPredictor(opts: { local: SideIndex; start: SimState; tunin
       const intents = intentsNow();
       prev = curr;
       curr = step(curr, intents, tuning);
+      states.push(curr);
       const s = curr;
       const events = s.events.map((e) => ({ ...e, tick: s.tick })).filter((e) => predictable(e, s) && tell(e));
       if (events.length > 0) out.push({ state: s, events });
@@ -133,6 +149,9 @@ export function createPredictor(opts: { local: SideIndex; start: SimState; tunin
     },
     get curr() {
       return curr;
+    },
+    get states() {
+      return states;
     },
     get guess() {
       return guess;
@@ -156,6 +175,7 @@ export function createPredictor(opts: { local: SideIndex; start: SimState; tunin
       const before = curr.sides[local].players[0].pos;
       const base = snap.state;
       prev = curr = base;
+      states = [base];
       head = Math.max(head, base.tick);
       const { move, aim } = dequantizeIntent(snap.last[remote]);
       guess = { move, aim, shot: null };
@@ -164,13 +184,14 @@ export function createPredictor(opts: { local: SideIndex; start: SimState; tunin
       const older = [...stamped.keys()].filter((t) => t < base.tick);
       const newest = Math.max(...older);
       for (const t of older) if (t !== newest) stamped.delete(t);
-      for (const [key, t] of toldKeys) if (t < base.tick - TOLD_TICKS) toldKeys.delete(key);
+      toldKeys = toldKeys.filter((t) => t.tick >= base.tick - TOLD_TICKS);
 
-      const fromCourt = snap.events.filter((e) => !predictable(e, base) || tell(e));
-      const out: Told[] = fromCourt.length > 0 ? [{ state: base, events: fromCourt }] : [];
-      out.push(...advance());
+      const court = snap.events.filter((e) => !predictable(e, base));
+      const missed = snap.events.filter((e) => predictable(e, base) && tell(e));
+      const told: Told[] = missed.length > 0 ? [{ state: base, events: missed }] : [];
+      told.push(...advance());
       const after = curr.sides[local].players[0].pos;
-      return { correction: { x: after.x - before.x, z: after.z - before.z }, told: out };
+      return { correction: { x: after.x - before.x, z: after.z - before.z }, told, court };
     },
   };
 }

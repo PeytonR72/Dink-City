@@ -15,6 +15,7 @@ import {
   type SimTuning,
   type Vec3,
 } from '../sim';
+import type { Clocks } from '../net';
 import type { ViewTuning } from '../tuning';
 import { VENUES, type Venue } from '../venue/venues';
 import { Character } from './character';
@@ -169,11 +170,17 @@ export class Renderer {
     for (const e of events) {
       if (e.kind !== 'hit') continue;
       const player = s.sides[e.side].players[0];
-      this.players[e.side].lastHit = { tick: s.tick, pos: toCharacter(endOf(s, e.side), player.pos, e.pos), variant: e.variant };
+      // Online, an event carries its Tick, which can be before the Snapshot it came in.
+      const tick = 'tick' in e && typeof e.tick === 'number' ? e.tick : s.tick;
+      this.players[e.side].lastHit = { tick, pos: toCharacter(endOf(s, e.side), player.pos, e.pos), variant: e.variant };
     }
   }
 
-  render(prev: SimState, curr: SimState, alpha: number, dt: number) {
+  /**
+   * Draws a frame between `prev` and `curr`. Online, `clock` says the Tick each Player and the ball are drawn at, each
+   * on its own timeline (`composeView`); offline they're all at `curr.tick + alpha`.
+   */
+  render(prev: SimState, curr: SimState, alpha: number, dt: number, clock?: Clocks) {
     const v = this.view;
     this.applyLighting();
     const view = localView(curr, this.localSide);
@@ -200,7 +207,7 @@ export class Renderer {
       pv.character.root.position.set(p.x, 0, p.z);
       pv.character.root.rotation.y = end === 0 ? 0 : Math.PI;
       pv.shadow.position.set(p.x, 0.003, p.z);
-      pv.character.update(this.pose(prev, curr, i, alpha), dt);
+      pv.character.update(this.pose(prev, curr, i, alpha, clock), dt);
       if (i === 1 && this.machineOn) this.placeMachine(p, end, pv, curr.tick + alpha);
 
       pv.ring.position.set(p.x, 0.006, p.z);
@@ -234,7 +241,7 @@ export class Renderer {
   }
 
   /** Animation inputs for one Player, from the Sim and its predicted Contact. */
-  private pose(prev: SimState, curr: SimState, i: SideIndex, alpha: number) {
+  private pose(prev: SimState, curr: SimState, i: SideIndex, alpha: number, clock?: Clocks) {
     const end = endOf(curr, i);
     const player = curr.sides[i].players[0];
     const prevPos = prev.sides[i].players[0].pos;
@@ -247,14 +254,17 @@ export class Renderer {
 
     const predicted = player.commit ? predictContact(curr, i, this.sim) : null;
     const hit = this.players[i].lastHit;
-    // `curr.tick + alpha` when they're one Tick apart, the same moment between Snapshots further apart.
-    const now = curr.tick + 1 - (1 - alpha) * Math.max(1, curr.tick - prev.tick);
+    // `curr.tick + alpha` when they're one Tick apart, the same moment between Snapshots further apart. Online, the
+    // Player's own clock: the swing is timed against hits told on it.
+    const now = clock ? clock.sides[i] : curr.tick + 1 - (1 - alpha) * Math.max(1, curr.tick - prev.tick);
+    // The predicted Contact is counted from the ball's Tick, which online is the ball's own clock.
+    const from = clock ? clock.ball : curr.tick;
     const swingSeconds = hit ? (now - hit.tick) * TICK : Infinity;
     return {
       velocity: { x: lv.x, z: lv.z },
       committed: player.commit !== null,
       contact: predicted && {
-        seconds: Math.max(0, (curr.tick + predicted.ticks - now) * TICK),
+        seconds: Math.max(0, (from + predicted.ticks - now) * TICK),
         pos: toCharacter(end, player.pos, predicted.pos),
         variant: predicted.variant,
       },

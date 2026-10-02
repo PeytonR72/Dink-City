@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { onlineConfig, quantizeIntent, type ClientMsg, type InMsg, type PingMsg, type SnapEvent } from '../src/net';
+import { INTERP_DELAY_TICKS, onlineConfig, quantizeIntent, type ClientMsg, type Clocks, type InMsg, type PingMsg, type SnapEvent } from '../src/net';
 import type { MatchView } from '../src/match/driver';
 import { OnlineMatch, SNAP_DISTANCE } from '../src/match/online';
 import { localView } from '../src/render/localView';
@@ -19,6 +19,10 @@ function court(ticks: number, ...then: Intent[]): SimState {
   return s;
 }
 
+/** The Court's states, Tick by Tick, with Side 1 walking right and Side 0 standing still. */
+const WALK = [START];
+for (let t = 0; t < 40; t++) WALK.push(step(WALK.at(-1)!, [STILL, RIGHT], simTuning));
+
 const x = (s: SimState, side: SideIndex = 0) => s.sides[side].players[0].pos.x;
 
 /** An online Match with a fake connection and view, logging what the view is told. */
@@ -27,7 +31,7 @@ function online(local: SideIndex = 0, input: () => Intent = () => STILL, start =
   /** This screen's clock, ms: one Tick per Tick-long frame. */
   let clock = 0;
   const told: { state: SimState; events: string[] }[] = [];
-  const drawn: { prev: SimState; curr: SimState; alpha: number; live: SimState }[] = [];
+  const drawn: { prev: SimState; curr: SimState; alpha: number; live: SimState; clock?: Clocks }[] = [];
   const view: MatchView = {
     tick: (state, events) => told.push({ state, events: events.map((e) => `${(e as SnapEvent).tick} ${e.kind}`) }),
     replay: () => {
@@ -36,7 +40,7 @@ function online(local: SideIndex = 0, input: () => Intent = () => STILL, start =
     replayed: () => {
       throw new Error('no Replays online');
     },
-    draw: (prev, curr, alpha, live) => drawn.push({ prev, curr, alpha, live }),
+    draw: (prev, curr, alpha, live, _dt, clock) => drawn.push({ prev, curr, alpha, live, clock }),
   };
   const match = new OnlineMatch({ local, start, view, input, send: (m) => sent.push(m), tuning: simTuning, now: () => clock });
   const snap = (state: SimState, events: SnapEvent[] = [], ack = -1) =>
@@ -66,6 +70,8 @@ function online(local: SideIndex = 0, input: () => Intent = () => STILL, start =
 
 const net = (tick: number): SnapEvent => ({ kind: 'net', pos: { x: 0, y: 0, z: 0 }, cord: false, tick });
 const dead = (tick: number): SnapEvent => ({ kind: 'dead', reason: 'net', loser: 0, tick });
+const remoteHit = (tick: number) =>
+  ({ kind: 'hit', side: 1, type: 'drive', variant: 'drive', volley: false, quality: 1, speed: 10, pos: { x: 0, y: 1, z: -6 }, tick }) as SnapEvent;
 
 describe('OnlineMatch', () => {
   it('plays the given Side', () => {
@@ -87,7 +93,7 @@ describe('OnlineMatch', () => {
     // The Court is on 100.2, so the first Tick stamped is 102; the prediction steps to it, Ticks 100 and 101 filled.
     // The input sampled has no Contact; the prediction calls the hit, and sends it.
     expect(ins()).toEqual([{ t: 'in', from: 102, intents: [[0, 0, 0, 0, 4]] }]);
-    expect(match.curr.ball.lastHitBy).toBe(0);
+    expect(match.predicted.curr.ball.lastHitBy).toBe(0);
   });
 
   it('draws the Guest on Side 1 mirrored, at the bottom, as the renderer is told', () => {
@@ -102,8 +108,9 @@ describe('OnlineMatch', () => {
   it("draws the start state until it knows the Court's clock", () => {
     const { match, frames, last } = online();
     frames(3);
-    expect(last()).toEqual({ prev: START, curr: START, alpha: 1, live: START });
-    expect(match.curr).toBe(START);
+    expect(last()).toMatchObject({ curr: START, alpha: 1, live: START, clock: { sides: [0, 0], ball: 0 } });
+    expect(last().prev.sides).toEqual(START.sides);
+    expect(match.predicted.curr).toBe(START);
   });
 
   it("pings the Court, and sends no input until it knows the Court's clock", () => {
@@ -154,29 +161,60 @@ describe('OnlineMatch', () => {
     const { match, synced, frames, last } = online(0, () => key);
     synced();
     frames(3);
-    const still = x(match.curr);
+    const still = x(last().curr);
     key = RIGHT;
     frames(1);
-    expect(x(match.curr)).not.toBe(still);
-    expect(x(last().curr)).toBe(x(match.curr));
+    expect(x(last().curr)).toBeGreaterThan(still);
     // Ahead of the Court: the prediction has stepped every Tick stamped.
-    expect(match.curr.tick).toBe(match.net.unacked + 3);
+    expect(match.predicted.curr.tick).toBe(match.net.unacked + 3);
   });
 
-  it('draws the prediction between its last two Ticks on the input clock, and scores from the Court', () => {
-    const { match, synced, frames, snap, last } = online();
+  it('draws the local Player between the last two predicted Ticks on the input clock, and scores from the Court', () => {
+    let key = RIGHT;
+    const { match, synced, frames, snap, last } = online(0, () => key);
     synced();
     frames(4);
-    expect(last().prev).toBe(match.prev);
-    expect(last().curr).toBe(match.curr);
-    expect(match.curr.tick - match.prev.tick).toBe(1);
-    expect(last().alpha).toBeGreaterThan(0);
-    expect(last().alpha).toBeLessThanOrEqual(1);
+    const { prev, curr } = match.predicted;
+    expect(curr.tick - prev.tick).toBe(1);
+    const now = last().clock!.sides[0];
+    expect(now).toBeGreaterThan(prev.tick);
+    expect(now).toBeLessThanOrEqual(curr.tick);
+    expect(x(last().curr)).toBeCloseTo(x(prev) + (x(curr) - x(prev)) * (now - prev.tick), 12);
+    expect(last().alpha).toBe(1);
     expect(last().live).toBe(START);
+    key = STILL;
     const told = court(2);
     snap(told);
     frames(1);
     expect(last().live).toBe(told);
+  });
+
+  it('draws the remote Player from the Snapshots, 100 ms behind the newest', () => {
+    const { synced, frames, snap, last } = online();
+    synced();
+    for (let t = 2; t <= 30; t += 2) {
+      snap(WALK[t]!);
+      frames(2);
+    }
+    const remote = last().clock!.sides[1];
+    // It runs on with real time between Snapshots, two Ticks apart.
+    expect(remote).toBeGreaterThan(30 - INTERP_DELAY_TICKS - 2);
+    expect(remote).toBeLessThan(30 - INTERP_DELAY_TICKS + 2);
+    const t0 = Math.floor(remote / 2) * 2;
+    const between = x(WALK[t0]!, 1) + ((x(WALK[t0 + 2]!, 1) - x(WALK[t0]!, 1)) * (remote - t0)) / 2;
+    expect(x(last().curr, 1)).toBeCloseTo(between, 12);
+  });
+
+  it('is over only once the Court says so', () => {
+    const { match, synced, frames, snap } = online();
+    synced();
+    frames(4);
+    expect(match.curr.phase).not.toBe('over');
+    const over = court(4);
+    over.phase = 'over';
+    snap(over);
+    frames(1);
+    expect(match.curr.phase).toBe('over');
   });
 
   it('ignores a Snapshot older than one it has', () => {
@@ -186,6 +224,7 @@ describe('OnlineMatch', () => {
     snap(court(6));
     snap(court(4));
     expect(match.latest.tick).toBe(6);
+    expect(match.remoteTick).toBe(6 - INTERP_DELAY_TICKS);
   });
 
   it('smooths a small correction of the local Player over a few frames', () => {
@@ -194,18 +233,18 @@ describe('OnlineMatch', () => {
     synced();
     key = RIGHT;
     frames(8);
-    const before = x(match.curr);
+    const before = x(match.predicted.curr);
     // Input starts at Tick 3, and the Court never got Ticks 3 and 4, so it stood the Player still for them.
     snap(court(3, STILL, STILL));
-    const jump = x(match.curr) - before;
+    const jump = x(match.predicted.curr) - before;
     expect(Math.abs(jump)).toBeGreaterThan(0.005);
     expect(Math.abs(jump)).toBeLessThan(SNAP_DISTANCE);
     key = STILL;
     frames(1);
     // Drawn near where it was, not where the correction put it; then it settles on the prediction.
-    expect(Math.abs(x(last().curr) - x(match.curr))).toBeGreaterThan(Math.abs(jump) / 2);
+    expect(Math.abs(x(last().curr) - x(match.predicted.curr))).toBeGreaterThan(Math.abs(jump) / 2);
     frames(30);
-    expect(x(last().curr)).toBe(x(match.curr));
+    expect(x(last().curr)).toBe(x(match.predicted.curr));
   });
 
   it('snaps a large correction at once', () => {
@@ -216,7 +255,7 @@ describe('OnlineMatch', () => {
     moved.sides[0].players[0].pos.x += SNAP_DISTANCE * 2;
     snap(moved);
     frames(1);
-    expect(x(last().curr)).toBe(x(match.curr));
+    expect(x(last().curr)).toBe(x(match.predicted.curr));
   });
 
   it("tells the Court's outcome events as they come, with its state, and a predictable one only once", () => {
@@ -225,9 +264,25 @@ describe('OnlineMatch', () => {
     frames(8);
     const s = court(4);
     snap(s, [net(3), dead(4)]);
-    expect(told).toEqual([{ state: s, events: ['3 net', '4 dead'] }]);
+    expect(told).toEqual([
+      { state: s, events: ['3 net'] },
+      { state: s, events: ['4 dead'] },
+    ]);
     // The same net again, from a Snapshot that repeats it, isn't told twice.
     snap(court(6), [net(3)]);
-    expect(told.length).toBe(1);
+    expect(told.length).toBe(2);
+  });
+
+  it("tells the remote Player's hit when the Interpolated timeline draws it", () => {
+    const { match, synced, frames, snap, told } = online();
+    synced();
+    frames(12);
+    const s = court(12);
+    snap(s, [remoteHit(11)]);
+    while (match.remoteTick < 11) {
+      expect(told).toEqual([]);
+      frames(1);
+    }
+    expect(told).toEqual([{ state: s, events: ['11 hit'] }]);
   });
 });
