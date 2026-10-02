@@ -1,15 +1,13 @@
 // The Court's Match engine, pure: everything the Court does per Tick, with no Durable Object and no clock. The
 // Court decides when to step (`tickLoop`) and who to send to. Each Side's Intents wait here for their Tick; later
 // issues grow the input handling (Reported Contact, the Takeover Bot) behind the same interface.
-import { PRESETS, dequantizeIntent, type CourtMsg, type InMsg, type PresetId, type SnapEvent } from '../../src/net';
+import { PRESETS, dequantizeIntent, fadeIntent, stillIntent, quantizeIntent, type CourtMsg, type InMsg, type PresetId, type QIntent, type SnapEvent } from '../../src/net';
 import { createInitialState, step, type Intent, type SideIndex, type SimState, type SimTuning } from '../../src/sim';
 
 /** A Snapshot goes out once this many Ticks have run since the last one: 30 Hz. */
 const SNAP_TICKS = 2;
 /** Intents labeled further ahead of the Court than this are refused. A client leads by at most 15. */
 export const MAX_AHEAD_TICKS = 30;
-/** With no Intent coming, a Side's last move fades to standing still over this many Ticks. */
-export const DECAY_TICKS = 6;
 /** The Rewind window: an Intent this many Ticks late still lands on its Tick. */
 export const REWIND_TICKS = 15;
 /** The ring buffer keeps this many past states, twice the window, for Reported Contact (issue 10) to look back on. */
@@ -100,10 +98,13 @@ export function createCourtMatch(opts: {
   /** Outcome events not sent yet, waiting until they're final. */
   let held: SnapEvent[] = [];
   let snapTick = 0;
+  /** The Intents the last Tick was stepped with, for the Snapshot's `last`. */
+  let lastIntents: readonly [Intent, Intent] = [stillIntent(), stillIntent()];
   const over = () => state.phase === 'over';
   /** A Snapshot for `side`, followed by `over` once the Match has a winner. */
   const snapFor = (side: SideIndex, evs: SnapEvent[]): CourtMsg[] => {
-    const snap: CourtMsg = { t: 'snap', tick: state.tick, ack: feeds[side].ack, state, events: evs };
+    const last: [QIntent, QIntent] = [quantizeIntent(lastIntents[0]), quantizeIntent(lastIntents[1])];
+    const snap: CourtMsg = { t: 'snap', tick: state.tick, ack: feeds[side].ack, state, last, events: evs };
     const winner = state.match.winner;
     return over() && winner !== null ? [snap, { t: 'over', winner }] : [snap];
   };
@@ -124,6 +125,7 @@ export function createCourtMatch(opts: {
     const intents = [a.intent, b.intent] as const;
     history[tick % HISTORY_TICKS] = { tick, state, fills, intents, real: [a.real, b.real] };
     fills = [a.fill, b.fill];
+    lastIntents = intents;
     opts.onStep?.(tick, intents);
     state = step(state, intents, opts.tuning);
     for (const e of state.events) {
@@ -225,13 +227,11 @@ function sideOf(e: SnapEvent): SideIndex | null {
  * Intent, or the missing-input fill. A pure function of the Feed and the Fill before, so a re-simulation repeats it.
  */
 function intentFor(f: Feed, before: Fill, tick: number): { intent: Intent; real: boolean; fill: Fill } {
-  if (f.goneAt !== null && tick >= f.goneAt) return { intent: idle(), real: false, fill: before };
+  if (f.goneAt !== null && tick >= f.goneAt) return { intent: stillIntent(), real: false, fill: before };
   const intent = f.received.get(tick);
   if (intent) return { intent, real: true, fill: { last: intent, missing: 0 } };
   const missing = before.missing + 1;
-  const k = Math.max(0, 1 - (missing - 1) / DECAY_TICKS);
-  const { move, aim } = before.last;
-  return { intent: { move: { x: move.x * k, y: move.y * k }, aim, shot: null }, real: false, fill: { last: before.last, missing } };
+  return { intent: fadeIntent(before.last, missing), real: false, fill: { last: before.last, missing } };
 }
 
 function dropIntents(f: Feed, which: (tick: number) => boolean) {
@@ -243,9 +243,5 @@ function feed(): Feed {
 }
 
 function fill(): Fill {
-  return { last: idle(), missing: 0 };
-}
-
-function idle(): Intent {
-  return { move: { x: 0, y: 0 }, aim: { x: 0, y: 0 }, shot: null };
+  return { last: stillIntent(), missing: 0 };
 }

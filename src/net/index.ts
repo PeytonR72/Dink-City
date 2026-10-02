@@ -2,9 +2,11 @@
 // bundle them: no DOM, no three.js, no wall clock, and no randomness outside the Sim's seeded rng.
 export * from './clockSync';
 export * from './courtCode';
+export * from './fade';
 export * from './inputStream';
 export * from './intentCodec';
 export * from './name';
+export * from './prediction';
 export * from './presets';
 export * from './protocol';
 export * from './simHash';

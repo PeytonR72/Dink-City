@@ -4,7 +4,7 @@ import { isQIntent, type QIntent } from './intentCodec';
 import { isPresetId, type PresetId } from './presets';
 
 /** Bump when a message changes shape. The handshake refuses a mismatch with `version`. */
-export const PROTOCOL_VERSION = 4;
+export const PROTOCOL_VERSION = 5;
 
 /**
  * Why the Court refused or dropped a client. Every code but `bad_message` closes the socket. `host_left`: the Host
@@ -79,16 +79,27 @@ export type SnapEvent = SimEvent & { tick: number };
  * is sent to both when the Match begins, and again after the `welcome` of a Player who reloads mid-Match; its
  * `players` names both, since the Host's `welcome` came before the Guest was seated. A `snap`
  * carries the full state, the last Tick up to which the Court has every Intent from this client (`ack`, -1 before
- * any), and every event since the previous `snap`. `pong` answers a `ping` with the Court's Tick when it was sent,
+ * any), the Intents the Court stepped the Tick before `state` with (`last`: a client's guess at its opponent's next ones),
+ * and every event since the previous `snap`. `pong` answers a `ping` with the Court's Tick when it was sent,
  * fractional: the Ticks stepped plus how far the Court's clock is into the next.
  */
 export type CourtMsg =
   | { t: 'welcome'; side: SideIndex; token: string; preset: PresetId; players: [CourtPlayer | null, CourtPlayer | null] }
   | { t: 'error'; code: CourtErrorCode }
   | { t: 'start'; seed: number; preset: PresetId; players: [CourtPlayer | null, CourtPlayer | null] }
-  | { t: 'snap'; tick: number; ack: number; state: SimState; events: SnapEvent[] }
+  | SnapMsg
   | { t: 'over'; winner: SideIndex }
   | PongMsg;
+
+/** A Snapshot: see `CourtMsg`. */
+export interface SnapMsg {
+  t: 'snap';
+  tick: number;
+  ack: number;
+  state: SimState;
+  last: [QIntent, QIntent];
+  events: SnapEvent[];
+}
 
 /** An open Court as the Lobby lists it. Full Courts aren't listed, so `players` is always 1. */
 export interface LobbyCourt {
@@ -171,7 +182,16 @@ export function isCourtMsg(v: unknown): v is CourtMsg {
     case 'start':
       return Number.isSafeInteger(m.seed) && isPresetId(m.preset) && isPlayers(m.players);
     case 'snap':
-      return Number.isSafeInteger(m.tick) && Number.isSafeInteger(m.ack) && typeof m.state === 'object' && m.state !== null && Array.isArray(m.events);
+      return (
+        Number.isSafeInteger(m.tick) &&
+        Number.isSafeInteger(m.ack) &&
+        typeof m.state === 'object' &&
+        m.state !== null &&
+        Array.isArray(m.last) &&
+        m.last.length === 2 &&
+        m.last.every(isQIntent) &&
+        Array.isArray(m.events)
+      );
     case 'over':
       return isSide(m.winner);
     case 'pong':

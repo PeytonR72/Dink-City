@@ -295,8 +295,10 @@ browser (menu) ──WebSocket──▶ Lobby (singleton "global")      list of 
 
 - **Control messages:** JSON, poker-style `{ t: ... }` unions in `src/net/protocol.ts` (Lobby and Court messages), re-guarded on the server.
 - **Client → Court input:** each packet carries `{ t: 'in', from, intents[] }`, the last N un-acknowledged Ticks, quantized. Sent every frame.
-- **Court → client snapshot:** `{ t: 'snap', tick, ack, state }` at 30 Hz.
+- **Court → client snapshot:** `{ t: 'snap', tick, ack, state, last, events }` at 30 Hz.
   - `ack` is the last input Tick up to which the Court has every Intent from that client.
+  - `last` is both Sides' Intents for the Tick before `state`, quantized. The Predicted timeline guesses the remote Player repeats theirs.
+  - `events` is every event since the previous Snapshot, each labeled with its Tick.
   - `state` is the full `SimState` (about 600 bytes of JSON, about 18 KB/s), including the opponent's Commit (Decision 4).
   - Deltas or binary come later, and only if measurements say so.
 - **Handshake:** `hello { name, token?, protocolVersion, simHash }`, where `simHash` is a hash of the `simTuning` JSON plus a build Sim version constant. A mismatch returns `version`, and the client says "Please reload for the latest version."
@@ -381,7 +383,7 @@ Exit criteria:
 - A reload mid-Match rejoins the same seat.
 - All the pure-module tests are green, and offline play is unchanged.
 
-### Phase 3: Clock sync, input timing, local prediction
+### Phase 3: Clock sync, input timing, local prediction ✅
 
 Issues: 07 (clock sync, redundant inputs, jitter buffer, netcode harness), 08 (Rewind window), 09 (client prediction).
 

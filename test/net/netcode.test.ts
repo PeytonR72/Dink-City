@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
-import { DECAY_TICKS } from '../../party/src/courtMatch';
-import type { Intent } from '../../src/sim';
-import { createHarness, type Harness, type LinkSpec } from './harness';
+import { DECAY_TICKS } from '../../src/net';
+import { SNAP_DISTANCE } from '../../src/match/online';
+import type { SnapEvent } from '../../src/net';
+import type { Intent, SideIndex } from '../../src/sim';
+import { createHarness, type FakeClient, type Harness, type LinkSpec } from './harness';
 
 // Each run plays half a minute of a Match.
 vi.setConfig({ testTimeout: 60_000 });
@@ -32,6 +34,33 @@ function onTime(h: Harness, side: 0 | 1) {
   return hit / total;
 }
 
+/**
+ * How far a client's prediction first put a Side's Player from where the Court finally had them, by Tick: from 2 s in
+ * (once the clock has settled) to a second before the end (so every input has landed).
+ */
+function predictionErrors(h: Harness, c: FakeClient, side: SideIndex): [number, number][] {
+  const end = h.match.state.tick - 60;
+  return [...c.predicted].flatMap(([tick, pos]) => {
+    const court = h.courtPos[side].get(tick);
+    if (!court || tick < 120 || tick > end) return [];
+    return [[tick, Math.hypot(pos[side].x - court.x, pos[side].z - court.z)]];
+  });
+}
+
+/** Walks one way and back every `period` Ticks, and forward and back every 1.7 periods, never pressing. */
+function walk(period: number) {
+  return (tick: number): Intent => ({
+    move: { x: Math.floor(tick / period) % 2 ? -1 : 1, y: Math.floor(tick / (period * 1.7)) % 2 ? -1 : 1 },
+    aim: { x: 0, y: 0 },
+    shot: null,
+  });
+}
+
+const eventKey = (e: SnapEvent) => `${e.tick} ${e.kind} ${e.kind === 'hit' ? e.side : ''}`;
+
+/** Float noise: the client and the Court run the same steps, so their states should agree to the last bit. */
+const NOISE = 1e-9;
+
 describe('the netcode harness', () => {
   for (const seed of [1, 2, 3]) {
     it(`loses no shot press at 150 ms, 30 ms jitter and 5% loss (seed ${seed})`, () => {
@@ -45,6 +74,20 @@ describe('the netcode harness', () => {
       // The lead covers the jitter: nearly every Intent arrives before its Tick.
       expect(onTime(h, 0)).toBeGreaterThan(0.98);
       expect(onTime(h, 1)).toBeGreaterThan(0.98);
+      // So each client's Player is drawn, when its input is stamped, exactly where the Court will step them, and no
+      // Snapshot ever corrects them.
+      for (const c of h.clients) {
+        const errors = predictionErrors(h, c, c.side);
+        expect(errors.length).toBeGreaterThan(1_000);
+        expect(errors.every(([, e]) => e < NOISE)).toBe(true);
+        expect(Math.max(...c.corrections)).toBeLessThan(NOISE);
+        // Its own hits are heard from the prediction, each the Court's, and nothing is heard twice.
+        const settledTick = h.match.state.tick - 60;
+        const own = (es: SnapEvent[]) => es.filter((e) => e.kind === 'hit' && e.side === c.side && e.tick <= settledTick).map(eventKey);
+        expect(own(h.courtEvents).length).toBeGreaterThan(2);
+        expect(own(c.heard)).toEqual(own(h.courtEvents));
+        expect(new Set(c.heard.map(eventKey)).size).toBe(c.heard.length);
+      }
     });
   }
 
@@ -70,6 +113,46 @@ describe('the netcode harness', () => {
     }
     expect(onTime(h, 0)).toBe(1);
     expect(onTime(h, 1)).toBe(1);
+  });
+
+  it('needs no correction while both Players run about, and guesses the remote one from their last Intent', () => {
+    const periods = [40, 55];
+    const h = createHarness({ seed: 2, up: LOSSY, down: LOSSY, drive: [walk(periods[0]!), walk(periods[1]!)] });
+    h.run(20_000);
+    for (const c of h.clients) {
+      expect(Math.max(...c.corrections)).toBeLessThan(NOISE);
+      expect(predictionErrors(h, c, c.side).every(([, e]) => e < NOISE)).toBe(true);
+
+      // The remote Player is guessed to keep doing what they last did. That's wrong only for the few Ticks after they
+      // turn (the lead plus the half round trip plus a Snapshot's wait, about 15), and each Snapshot puts them right.
+      const remote = (1 - c.side) as SideIndex;
+      const period = periods[remote]!;
+      const turnedAgo = (tick: number) => {
+        for (let k = tick; k >= 0; k--) if (k % period === 0 || Math.floor(k / (period * 1.7)) !== Math.floor((k - 1) / (period * 1.7))) return tick - k;
+        return Infinity;
+      };
+      const wrong = predictionErrors(h, c, remote).filter(([, e]) => e >= NOISE);
+      expect(wrong.length).toBeGreaterThan(50);
+      expect(wrong.every(([tick]) => turnedAgo(tick) <= 25)).toBe(true);
+      expect(Math.max(...wrong.map(([, e]) => e))).toBeLessThan(2);
+    }
+  });
+
+  it('corrects for a stall by a bounded amount, and is exact again after it', () => {
+    // The uplink freezes for 200 ms every 2.5 s (150 Ticks). The Court fills the Intents it's missing and its
+    // Snapshots say so, until the rewind puts them right: two corrections each time, never a drift.
+    const up: LinkSpec = { ...LOSSY, stall: { every: 2_500, ms: 200 } };
+    const h = createHarness({ seed: 3, up, down: LOSSY, drive: [walk(40), walk(55)] });
+    h.run(20_000);
+    for (const c of h.clients) {
+      const corrected = c.corrections.filter((d) => d >= NOISE);
+      expect(corrected.length).toBeGreaterThan(5);
+      expect(Math.max(...corrected)).toBeLessThan(SNAP_DISTANCE);
+      const wrong = predictionErrors(h, c, c.side).filter(([, e]) => e >= NOISE);
+      expect(wrong.length).toBeGreaterThan(0);
+      // Only in the second after each stall begins.
+      expect(wrong.every(([tick]) => tick % 150 < 60)).toBe(true);
+    }
   });
 
   it("knows the Court's Tick within a Tick a second in, and leads by a half round trip plus margin", () => {

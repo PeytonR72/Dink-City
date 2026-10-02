@@ -1,12 +1,13 @@
 // The netcode harness: the pure Court Match and two clients, joined by a fake network with latency, jitter and loss,
-// all on one virtual clock. The clients use the same clock sync and input stream as `OnlineMatch`, and every message
-// crosses the wire encoded and is re-guarded on arrival, as on the real Court. Deterministic for a given seed.
+// all on one virtual clock. The clients use the same clock sync, input stream and predictor as `OnlineMatch`, and every
+// message crosses the wire encoded and is re-guarded on arrival, as on the real Court. Deterministic for a given seed.
 import { DIFFICULTY, createBot } from '../../src/bot/bot';
 import { observe } from '../../src/bot/observe';
 import {
   PRESETS,
   createClockSync,
   createInputStream,
+  createPredictor,
   decode,
   dequantizeIntent,
   inputFrame,
@@ -19,9 +20,12 @@ import {
   type ClockSync,
   type CourtMsg,
   type InputStream,
+  type Predictor,
   type PresetId,
+  type SnapEvent,
+  type Told,
 } from '../../src/net';
-import { TICK, createInitialState, type Intent, type ShotType, type SideIndex, type SimState } from '../../src/sim';
+import { TICK, createInitialState, type Intent, type ShotType, type SideIndex, type SimState, type Vec3 } from '../../src/sim';
 import { simTuning } from '../../src/tuning';
 import { createCourtMatch, type CourtMatch } from '../../party/src/courtMatch';
 import { createTickLoop, type TickLoop } from '../../party/src/tickLoop';
@@ -72,6 +76,17 @@ export interface FakeClient {
   readonly stamped: Map<number, Intent>;
   readonly presses: Press[];
   latest: SimState;
+  /** The Predicted timeline, stamped and reconciled as `OnlineMatch` does. */
+  readonly predictor: Predictor;
+  /**
+   * Where the prediction first put each Side's Player at each Tick (by the state's Tick): as the screen drew it when
+   * that Tick was stamped.
+   */
+  readonly predicted: Map<number, [Vec3, Vec3]>;
+  /** How far each Snapshot moved the predicted local Player (m, ground plane), in order. */
+  readonly corrections: number[];
+  /** Every event the client told its view, from its prediction or the Court, in order. */
+  readonly heard: SnapEvent[];
   /** A stopped client runs no frames: no pings, no input. It still receives. */
   stopped: boolean;
 }
@@ -85,6 +100,10 @@ export interface Harness {
   readonly clients: [FakeClient, FakeClient];
   /** Each Side's Intents as the Court last stepped them, by Tick: a rewind's re-steps replace what came before. */
   readonly applied: [Map<number, Intent>, Map<number, Intent>];
+  /** Each Side's Player's position in the Court's states as last stepped, by the state's Tick. */
+  readonly courtPos: [Map<number, Vec3>, Map<number, Vec3>];
+  /** Every event the Court sent, in order. */
+  readonly courtEvents: SnapEvent[];
   /** Each Side's shot presses as the Court last stepped them, in Tick order. */
   readonly appliedPresses: [Press[], Press[]];
   /** How many steps re-stepped a Tick for a rewind. */
@@ -119,6 +138,8 @@ export function createHarness(opts: HarnessOptions): Harness {
   };
 
   const applied: Harness['applied'] = [new Map(), new Map()];
+  const courtPos: Harness['courtPos'] = [new Map(), new Map()];
+  const courtEvents: SnapEvent[] = [];
   let resteps = 0;
   const presses = (side: SideIndex): Press[] =>
     // A re-step keeps its Tick's place in the map, so this is in Tick order.
@@ -131,6 +152,8 @@ export function createHarness(opts: HarnessOptions): Harness {
       if (applied[0].has(tick)) resteps++;
       applied[0].set(tick, intents[0]);
       applied[1].set(tick, intents[1]);
+      // `onStep` comes just before the step, so the Court's state is still the one at `tick`.
+      for (const side of [0, 1] as const) courtPos[side].set(tick, { ...match.state.sides[side].players[0].pos });
     },
   });
   const loop: TickLoop = createTickLoop({ hz: 60, maxCatchUp: 8 });
@@ -158,8 +181,13 @@ export function createHarness(opts: HarnessOptions): Harness {
     send(opts.down, msg, isCourtMsg, (m) => {
       const c = clients[side];
       if (m.t === 'snap') {
-        c.latest = m.state;
         c.stream.ack(m.ack);
+        // Snapshots can pass each other on this network; an older one is stale.
+        if (m.tick <= c.latest.tick) return;
+        c.latest = m.state;
+        const { correction, told } = c.predictor.reconcile(m);
+        c.corrections.push(Math.hypot(correction.x, correction.z));
+        hear(c, told);
       } else if (m.t === 'pong') c.sync.pong(m, c.clock());
     });
 
@@ -172,6 +200,10 @@ export function createHarness(opts: HarnessOptions): Harness {
     stamped: new Map(),
     presses: [],
     latest: start,
+    predictor: createPredictor({ local: side, start, tuning: simTuning }),
+    predicted: new Map(),
+    corrections: [],
+    heard: [],
     stopped: false,
   });
   const clients: [FakeClient, FakeClient] = [client(0, 123_456.7), client(1, -4_321.2)];
@@ -180,6 +212,9 @@ export function createHarness(opts: HarnessOptions): Harness {
     return opts.drive?.[c.side] ?? ((tick, latest) => bot.think({ ...observe(latest, c.side), tick }));
   });
 
+  const hear = (c: FakeClient, told: Told[]) => {
+    for (const t of told) c.heard.push(...t.events);
+  };
   let each: (() => void) | undefined;
   /** One client frame, sending input as `OnlineMatch` does. */
   const frame = (c: FakeClient) => {
@@ -191,6 +226,9 @@ export function createHarness(opts: HarnessOptions): Harness {
       const wire = dequantizeIntent(quantizeIntent(intent));
       c.stamped.set(tick, wire);
       if (wire.shot) c.presses.push({ tick, shot: wire.shot });
+      hear(c, c.predictor.stamp(tick, intent));
+      const { curr } = c.predictor;
+      if (!c.predicted.has(curr.tick)) c.predicted.set(curr.tick, [{ ...curr.sides[0].players[0].pos }, { ...curr.sides[1].players[0].pos }]);
       return intent;
     });
     for (const msg of msgs) toCourt(c.side, msg);
@@ -200,7 +238,10 @@ export function createHarness(opts: HarnessOptions): Harness {
   let courtCalls = 1;
   const courtCallback = () => {
     const ticks = loop.advance(now);
-    for (const { side, msg } of match.advance(ticks)) toClient(side, msg);
+    for (const { side, msg } of match.advance(ticks)) {
+      if (side === 0 && msg.t === 'snap') courtEvents.push(...msg.events);
+      toClient(side, msg);
+    }
     at(Math.round(++courtCalls * TICK_MS), courtCallback);
   };
   at(Math.round(TICK_MS), courtCallback);
@@ -222,6 +263,8 @@ export function createHarness(opts: HarnessOptions): Harness {
     courtTick,
     clients,
     applied,
+    courtPos,
+    courtEvents,
     get appliedPresses(): [Press[], Press[]] {
       return [presses(0), presses(1)];
     },

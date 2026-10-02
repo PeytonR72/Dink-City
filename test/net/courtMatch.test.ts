@@ -1,11 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import { DIFFICULTY, createBot } from '../../src/bot/bot';
 import { observe } from '../../src/bot/observe';
-import { quantizeIntent, type CourtMsg, type InMsg, type PresetId, type QIntent, type SnapEvent } from '../../src/net';
+import { DECAY_TICKS, fadeIntent, quantizeIntent, type CourtMsg, type InMsg, type PresetId, type QIntent, type SnapEvent } from '../../src/net';
 import { PRESETS } from '../../src/net/presets';
 import { createInitialState, step, type Intent, type SideIndex } from '../../src/sim';
 import { simTuning } from '../../src/tuning';
-import { DECAY_TICKS, MAX_AHEAD_TICKS, REWIND_TICKS, createCourtMatch, type Outgoing } from '../../party/src/courtMatch';
+import { MAX_AHEAD_TICKS, REWIND_TICKS, createCourtMatch, type Outgoing } from '../../party/src/courtMatch';
 
 // A whole Match headlessly takes a few seconds.
 vi.setConfig({ testTimeout: 60_000 });
@@ -100,7 +100,18 @@ describe('the Court Match', () => {
     const m = court();
     m.receive(0, input(3, ZERO));
     m.advance(5);
-    expect(m.current(0)).toEqual([{ t: 'snap', tick: 5, ack: 3, state: m.state, events: [] }]);
+    expect(m.current(0)).toEqual([{ t: 'snap', tick: 5, ack: 3, state: m.state, last: [[0, 0, 0, 0, 0], [0, 0, 0, 0, 0]], events: [] }]);
+  });
+
+  it("tells each Snapshot the Intents its last Tick was stepped with, a late one's too once it lands", () => {
+    const m = court();
+    const aimed: Intent = { move: { x: 1, y: 0 }, aim: { x: 0, y: 1 }, shot: null };
+    m.receive(1, input(0, RIGHT, RIGHT, aimed));
+    expect(snaps(m.advance(3), 0)[0]!.last).toEqual([[0, 0, 0, 0, 0], [127, 0, 0, 127, 0]]);
+    // Side 0's Intent for Tick 2 comes a Tick late. The rewind steps Tick 2 with it, so Tick 4's fill fades from it.
+    const left: Intent = { move: { x: -1, y: 0 }, aim: { x: 0, y: 0 }, shot: null };
+    m.receive(0, input(2, left));
+    expect(snaps(m.advance(2), 0)[0]!.last).toEqual([quantizeIntent(fadeIntent(left, 2)), quantizeIntent(fadeIntent(aimed, 2))]);
   });
 
   it('sends at most one Snapshot per advance, however many Ticks it runs', () => {
@@ -380,7 +391,7 @@ describe('the Court Match', () => {
     // Nothing more once it's over, but a Player who reloads still gets the end.
     expect(a.m.advance(10)).toEqual([]);
     expect(a.m.current(1)).toEqual([
-      { t: 'snap', tick: a.m.state.tick, ack: a.inputs.length - 1, state: a.m.state, events: [] },
+      { t: 'snap', tick: a.m.state.tick, ack: a.inputs.length - 1, state: a.m.state, last: expect.any(Array), events: [] },
       { t: 'over', winner },
     ]);
   });

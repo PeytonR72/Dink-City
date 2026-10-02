@@ -368,6 +368,7 @@ async function goOnline(name: string, target: { preset: PresetId } | { code: str
           view,
           input: () => (mode !== 'match' ? STILL : drive ? drive(online!.latest) : input.sample()),
           send: (m) => link.send(m),
+          tuning: simTuning,
         });
         match = online;
         renderer.setLocalSide(side);

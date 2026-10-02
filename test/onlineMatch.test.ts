@@ -1,37 +1,46 @@
 import { describe, expect, it } from 'vitest';
-import type { ClientMsg, InMsg, PingMsg, SnapEvent } from '../src/net';
+import { quantizeIntent, type ClientMsg, type InMsg, type PingMsg, type SnapEvent } from '../src/net';
 import type { MatchView } from '../src/match/driver';
-import { INTERP_DELAY_TICKS, OnlineMatch } from '../src/match/online';
+import { OnlineMatch, SNAP_DISTANCE } from '../src/match/online';
 import { localView } from '../src/render/localView';
-import { TICK, createInitialState, type Intent, type SideIndex, type SimState } from '../src/sim';
+import { TICK, createInitialState, step, type Intent, type SideIndex, type SimState } from '../src/sim';
+import { simTuning } from '../src/tuning';
 
-/** A state labeled with Tick `tick`, told apart by its ball's x. */
-function at(tick: number): SimState {
-  const s = createInitialState(1);
-  s.tick = tick;
-  s.ball.pos.x = tick;
+const START = createInitialState(1);
+const STILL: Intent = { move: { x: 0, y: 0 }, aim: { x: 0, y: 0 }, shot: null };
+const RIGHT: Intent = { move: { x: 1, y: 0 }, aim: { x: 0, y: 0 }, shot: null };
+const Q_STILL = quantizeIntent(STILL);
+
+/** The Court's state after `ticks` Ticks of both Players standing still, then each of `then` for Side 0. */
+function court(ticks: number, ...then: Intent[]): SimState {
+  let s = START;
+  for (let t = 0; t < ticks; t++) s = step(s, [STILL, STILL], simTuning);
+  for (const i of then) s = step(s, [i, STILL], simTuning);
   return s;
 }
 
+const x = (s: SimState, side: SideIndex = 0) => s.sides[side].players[0].pos.x;
+
 /** An online Match with a fake connection and view, logging what the view is told. */
-function online(local: SideIndex = 0, input: () => Intent = idle) {
+function online(local: SideIndex = 0, input: () => Intent = () => STILL) {
   const sent: ClientMsg[] = [];
   /** This screen's clock, ms: one Tick per Tick-long frame. */
   let clock = 0;
-  const told: { tick: number; events: string[] }[] = [];
-  const drawn: { prev: number; curr: number; alpha: number; live: number }[] = [];
+  const told: { state: SimState; events: string[] }[] = [];
+  const drawn: { prev: SimState; curr: SimState; alpha: number; live: SimState }[] = [];
   const view: MatchView = {
-    tick: (s, events) => told.push({ tick: s.tick, events: events.map((e) => `${(e as SnapEvent).tick} ${e.kind}`) }),
+    tick: (state, events) => told.push({ state, events: events.map((e) => `${(e as SnapEvent).tick} ${e.kind}`) }),
     replay: () => {
       throw new Error('no Replays online');
     },
     replayed: () => {
       throw new Error('no Replays online');
     },
-    draw: (prev, curr, alpha, live) => drawn.push({ prev: prev.tick, curr: curr.tick, alpha, live: live.tick }),
+    draw: (prev, curr, alpha, live) => drawn.push({ prev, curr, alpha, live }),
   };
-  const match = new OnlineMatch({ local, start: at(0), view, input, send: (m) => sent.push(m), now: () => clock });
-  const snap = (tick: number, events: SnapEvent[] = [], ack = -1) => match.receive({ tick, ack, state: at(tick), events });
+  const match = new OnlineMatch({ local, start: START, view, input, send: (m) => sent.push(m), tuning: simTuning, now: () => clock });
+  const snap = (state: SimState, events: SnapEvent[] = [], ack = -1) =>
+    match.receive({ t: 'snap', tick: state.tick, ack, state, last: [Q_STILL, Q_STILL], events });
   /** A frame of `dt` seconds. */
   const frame = (dt: number) => {
     clock += dt * 1000;
@@ -46,15 +55,17 @@ function online(local: SideIndex = 0, input: () => Intent = idle) {
     const ping = sent.filter((m): m is PingMsg => m.t === 'ping').at(-1)!;
     match.pong({ t: 'pong', id: ping.id, clientTime: ping.clientTime, courtTick });
   };
+  /** Learns the Court's clock: on Tick 0.5 now, half a Tick off the frames so no input Tick lands on a rounding edge. */
+  const synced = () => {
+    frame(TICK);
+    pong(0.5);
+  };
   const ins = () => sent.filter((m): m is InMsg => m.t === 'in');
-  return { match, sent, ins, told, drawn, snap, frame, frames, pong, last: () => drawn[drawn.length - 1]! };
-}
-
-function idle(): Intent {
-  return { move: { x: 0, y: 0 }, aim: { x: 0, y: 0 }, shot: null };
+  return { match, sent, ins, told, drawn, snap, frame, frames, pong, synced, last: () => drawn[drawn.length - 1]! };
 }
 
 const net = (tick: number): SnapEvent => ({ kind: 'net', pos: { x: 0, y: 0, z: 0 }, cord: false, tick });
+const dead = (tick: number): SnapEvent => ({ kind: 'dead', reason: 'net', loser: 0, tick });
 
 describe('OnlineMatch', () => {
   it('plays the given Side', () => {
@@ -62,21 +73,19 @@ describe('OnlineMatch', () => {
   });
 
   it('draws the Guest on Side 1 mirrored, at the bottom, as the renderer is told', () => {
-    const { match, snap, frames } = online(1);
-    frames(1);
+    const { match, synced, frames } = online(1);
+    synced();
+    frames(10);
     // Side 1 starts at End 1.
     expect(localView(match.curr, match.local)).toMatchObject({ mirrored: true, ring: 1, landingFrom: 0 });
-    snap(2);
-    frames(10);
-    expect(localView(match.curr, match.local).mirrored).toBe(true);
     expect(localView(match.curr, 0).mirrored).toBe(false);
   });
 
-  it('draws the start state until the first Snapshot', () => {
+  it("draws the start state until it knows the Court's clock", () => {
     const { match, frames, last } = online();
     frames(3);
-    expect(last()).toEqual({ prev: 0, curr: 0, alpha: 1, live: 0 });
-    expect(match.curr.tick).toBe(0);
+    expect(last()).toEqual({ prev: START, curr: START, alpha: 1, live: START });
+    expect(match.curr).toBe(START);
   });
 
   it("pings the Court, and sends no input until it knows the Court's clock", () => {
@@ -101,114 +110,106 @@ describe('OnlineMatch', () => {
   });
 
   it('resends what the Court has not acknowledged, and drops what it has', () => {
-    const { ins, frame, frames, pong, snap } = online();
-    frame(TICK);
-    // Half a Tick off the frames, so no input Tick lands on a rounding edge.
-    pong(0.5);
+    const { ins, synced, frames, snap } = online();
+    synced();
     frames(5);
     expect(ins().at(-1)).toMatchObject({ from: 3, intents: { length: 5 } });
-    snap(2, [], 5);
+    snap(court(2), [], 5);
     frames(1);
     expect(ins().at(-1)).toMatchObject({ from: 6, intents: { length: 3 } });
   });
 
   it('stops sending once a Snapshot says the Match is over', () => {
-    const { match, sent, frame, frames, pong } = online();
-    frame(TICK);
-    pong(0.5);
+    const { match, sent, synced, frames } = online();
+    synced();
     frames(3);
-    const over = at(4);
+    const over = court(4);
     over.phase = 'over';
-    match.receive({ tick: 4, ack: -1, state: over, events: [] });
+    match.receive({ t: 'snap', tick: 4, ack: -1, state: over, last: [Q_STILL, Q_STILL], events: [] });
     const before = sent.length;
     frames(120);
     expect(sent.length).toBe(before);
   });
 
-  it('draws about 100 ms behind the newest Snapshot, between the two around that time', () => {
-    const { snap, frames, last } = online();
-    // Snapshots every 2 Ticks, a frame every Tick, for a second.
-    for (let t = 2; t <= 60; t += 2) {
-      snap(t);
-      frames(2);
-    }
-    const { prev, curr, alpha } = last();
-    const drawnAt = prev + alpha * (curr - prev);
-    expect(curr - prev).toBe(2);
-    expect(drawnAt).toBeGreaterThan(prev - 1e-9);
-    expect(drawnAt).toBeLessThanOrEqual(curr);
-    expect(60 - drawnAt).toBeGreaterThanOrEqual(INTERP_DELAY_TICKS - 3);
-    expect(60 - drawnAt).toBeLessThan(INTERP_DELAY_TICKS + 2);
-  });
-
-  it('interpolates between the states it draws: the view gets the pair and how far along', () => {
-    const { match, snap, frames, last } = online();
-    snap(100);
-    snap(102);
-    snap(104);
+  it('moves the local Player the frame the key goes down, with no Snapshot yet', () => {
+    let key = STILL;
+    const { match, synced, frames, last } = online(0, () => key);
+    synced();
+    frames(3);
+    const still = x(match.curr);
+    key = RIGHT;
     frames(1);
-    const { prev, curr, alpha } = last();
-    expect(match.prev.ball.pos.x).toBe(prev);
-    expect(match.curr.ball.pos.x).toBe(curr);
-    expect(alpha).toBeGreaterThanOrEqual(0);
-    expect(alpha).toBeLessThanOrEqual(1);
+    expect(x(match.curr)).not.toBe(still);
+    expect(x(last().curr)).toBe(x(match.curr));
+    // Ahead of the Court: the prediction has stepped every Tick stamped.
+    expect(match.curr.tick).toBe(match.net.unacked + 3);
   });
 
-  it('never draws past the newest Snapshot when they stop coming', () => {
-    const { snap, frames, last } = online();
-    for (let t = 2; t <= 20; t += 2) {
-      snap(t);
-      frames(2);
-    }
-    frames(120);
-    expect(last()).toMatchObject({ prev: 20, curr: 20, alpha: 1, live: 20 });
-  });
-
-  it('jumps to the newest Snapshots after a long stall instead of crawling through them', () => {
-    const { snap, frames, last } = online();
-    snap(2);
-    frames(2);
-    // Say a rejoin, or a hidden tab: ten seconds of Snapshots arrive at once.
-    for (let t = 4; t <= 600; t += 2) snap(t);
+  it('draws the prediction between its last two Ticks on the input clock, and scores from the Court', () => {
+    const { match, synced, frames, snap, last } = online();
+    synced();
+    frames(4);
+    expect(last().prev).toBe(match.prev);
+    expect(last().curr).toBe(match.curr);
+    expect(match.curr.tick - match.prev.tick).toBe(1);
+    expect(last().alpha).toBeGreaterThan(0);
+    expect(last().alpha).toBeLessThanOrEqual(1);
+    expect(last().live).toBe(START);
+    const told = court(2);
+    snap(told);
     frames(1);
-    expect(last().curr).toBeGreaterThan(600 - INTERP_DELAY_TICKS - 4);
+    expect(last().live).toBe(told);
   });
 
   it('ignores a Snapshot older than one it has', () => {
-    const { match, snap, frames } = online();
-    snap(10);
-    snap(8);
+    const { match, synced, frames, snap } = online();
+    synced();
+    frames(8);
+    snap(court(6));
+    snap(court(4));
+    expect(match.latest.tick).toBe(6);
+  });
+
+  it('smooths a small correction of the local Player over a few frames', () => {
+    let key = STILL;
+    const { match, synced, frames, snap, last } = online(0, () => key);
+    synced();
+    key = RIGHT;
+    frames(8);
+    const before = x(match.curr);
+    // Input starts at Tick 3, and the Court never got Ticks 3 and 4, so it stood the Player still for them.
+    snap(court(3, STILL, STILL));
+    const jump = x(match.curr) - before;
+    expect(Math.abs(jump)).toBeGreaterThan(0.005);
+    expect(Math.abs(jump)).toBeLessThan(SNAP_DISTANCE);
+    key = STILL;
+    frames(1);
+    // Drawn near where it was, not where the correction put it; then it settles on the prediction.
+    expect(Math.abs(x(last().curr) - x(match.curr))).toBeGreaterThan(Math.abs(jump) / 2);
     frames(30);
-    expect(match.curr.tick).toBe(10);
+    expect(x(last().curr)).toBe(x(match.curr));
   });
 
-  it('tells the view each event once, as its Tick is drawn, with the Snapshot it came in', () => {
-    const { snap, frames, told } = online();
-    snap(2, [net(1)]);
-    snap(4, [net(3), net(4)]);
+  it('snaps a large correction at once', () => {
+    const { match, synced, frames, snap, last } = online();
+    synced();
+    frames(4);
+    const moved = court(2);
+    moved.sides[0].players[0].pos.x += SNAP_DISTANCE * 2;
+    snap(moved);
     frames(1);
-    // Tick 1 is still 100 ms in the future of what's drawn.
-    expect(told).toEqual([]);
-    for (let t = 6; t <= 30; t += 2) {
-      snap(t);
-      frames(2);
-    }
-    expect(told).toEqual([
-      { tick: 2, events: ['1 net'] },
-      { tick: 4, events: ['3 net'] },
-      { tick: 4, events: ['4 net'] },
-    ]);
-    frames(60);
-    expect(told.length).toBe(3);
+    expect(x(last().curr)).toBe(x(match.curr));
   });
 
-  it('tells the view skipped-over events too, once, when it jumps', () => {
-    const { snap, frames, told } = online();
-    snap(2);
-    frames(1);
-    for (let t = 4; t <= 600; t += 2) snap(t, t === 300 ? [net(299)] : []);
-    frames(1);
-    frames(1);
-    expect(told).toEqual([{ tick: 300, events: ['299 net'] }]);
+  it("tells the Court's outcome events as they come, with its state, and a predictable one only once", () => {
+    const { synced, frames, snap, told } = online();
+    synced();
+    frames(8);
+    const s = court(4);
+    snap(s, [net(3), dead(4)]);
+    expect(told).toEqual([{ state: s, events: ['3 net', '4 dead'] }]);
+    // The same net again, from a Snapshot that repeats it, isn't told twice.
+    snap(court(6), [net(3)]);
+    expect(told.length).toBe(1);
   });
 });
