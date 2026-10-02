@@ -1,9 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
-import { DIFFICULTY, createBot } from '../../src/bot/bot';
+import { DIFFICULTY, createBot, type Bot } from '../../src/bot/bot';
 import { observe } from '../../src/bot/observe';
-import { DECAY_TICKS, fadeIntent, quantizeIntent, type CourtMsg, type InMsg, type PresetId, type QIntent, type SnapEvent } from '../../src/net';
-import { PRESETS } from '../../src/net/presets';
-import { createInitialState, step, type Intent, type SideIndex } from '../../src/sim';
+import { DECAY_TICKS, dequantizeIntent, fadeIntent, quantizeIntent, type CourtMsg, type InMsg, type PresetId, type QIntent, type SnapEvent } from '../../src/net';
+import { onlineConfig } from '../../src/net/presets';
+import { REACH_SLACK, autoContact, createInitialState, endOf, endOfZ, step, type Intent, type ShotType, type SideIndex, type SimState } from '../../src/sim';
+import { sweetSpotDistance } from '../../src/sim/step';
 import { simTuning } from '../../src/tuning';
 import { MAX_AHEAD_TICKS, REWIND_TICKS, createCourtMatch, type Outgoing } from '../../party/src/courtMatch';
 
@@ -40,9 +41,15 @@ function snaps(out: Outgoing[], side: SideIndex) {
 
 /** Steps the plain Sim the way the Court should, for comparison. */
 function reference(pairs: [Intent, Intent][]) {
-  let s = createInitialState(SEED, PRESETS.quick.config);
+  let s = createInitialState(SEED, onlineConfig('quick'));
   for (const pair of pairs) s = step(s, pair, simTuning);
   return s;
+}
+
+/** Both Bots' Intents for the step from `s`, quantized, each calling its hit as its client would: by `auto`. */
+function botIntents(s: SimState, bots: readonly [Bot, Bot]): [QIntent, QIntent] {
+  const pair = [bots[0].think(observe(s, 0)), bots[1].think(observe(s, 1))].map((i) => dequantizeIntent(quantizeIntent(i))) as [Intent, Intent];
+  return [0, 1].map((side) => quantizeIntent({ ...pair[side]!, contact: autoContact(s, pair, side as SideIndex, simTuning) })) as [QIntent, QIntent];
 }
 
 /** Serve position with the Host moving right; the serve delay is long enough that nobody can serve yet. */
@@ -50,7 +57,7 @@ const RIGHT: Intent = { move: { x: 1, y: 0 }, aim: { x: 0, y: 0 }, shot: null };
 
 describe('the Court Match', () => {
   it('starts from the Preset rules and the seed', () => {
-    expect(court().state).toEqual(createInitialState(SEED, PRESETS.quick.config));
+    expect(court().state).toEqual(createInitialState(SEED, onlineConfig('quick')));
   });
 
   it('steps a Side with no input yet with a zero Intent', () => {
@@ -249,7 +256,7 @@ describe('the Court Match', () => {
     const onTimeOut: Outgoing[] = [];
     let end = Infinity;
     while (onTime.state.tick < end) {
-      const q = [0, 1].map((side) => quantizeIntent(bots[side]!.think(observe(onTime.state, side as SideIndex)))) as [QIntent, QIntent];
+      const q = botIntents(onTime.state, bots);
       inputs.push(q);
       onTime.receive(0, { t: 'in', from: onTime.state.tick, intents: [q[0]] });
       onTime.receive(1, { t: 'in', from: onTime.state.tick, intents: [q[1]] });
@@ -359,7 +366,7 @@ describe('the Court Match', () => {
       const out: Outgoing[] = [];
       const inputs: [QIntent, QIntent][] = [];
       while (!m.over && m.state.tick < 60 * 60 * 30) {
-        const q = [0, 1].map((side) => quantizeIntent(bots[side]!.think(observe(m.state, side as SideIndex)))) as [QIntent, QIntent];
+        const q = botIntents(m.state, bots);
         inputs.push(q);
         m.receive(0, { t: 'in', from: m.state.tick, intents: [q[0]] });
         m.receive(1, { t: 'in', from: m.state.tick, intents: [q[1]] });
@@ -394,5 +401,124 @@ describe('the Court Match', () => {
       { t: 'snap', tick: a.m.state.tick, ack: a.inputs.length - 1, state: a.m.state, last: expect.any(Array), events: [] },
       { t: 'over', winner },
     ]);
+  });
+});
+
+/**
+ * Reported Contact: a hitter's client calls each hit, and the Court checks it. Each test replays one on-time Bot
+ * Match, with Side 0's Intents late or forged around its first Rally hit.
+ */
+describe('Reported Contact on the Court', () => {
+  const reports = (q: QIntent) => dequantizeIntent(q).contact === true;
+  /** `q` as a modified client sends it: reporting Contact, and pressing `shot` if given (null keeps no press). */
+  const forged = (q: QIntent, shot?: ShotType | null) => {
+    const i = dequantizeIntent(q);
+    return quantizeIntent({ ...i, shot: shot === undefined ? i.shot : shot, contact: true });
+  };
+  const isHit = (e: SnapEvent, side: SideIndex) => e.kind === 'hit' && e.side === side && e.variant !== 'serve';
+
+  /** On time, to 2 s past Side 0's first Rally hit: the Intents stepped, the state on every Tick, the events told. */
+  const ON_TIME = (() => {
+    const m = court();
+    const bots = [createBot(0, 1, DIFFICULTY.hard, simTuning), createBot(1, 2, DIFFICULTY.hard, simTuning)] as const;
+    const inputs: [QIntent, QIntent][] = [];
+    const states: SimState[] = [m.state];
+    const events: SnapEvent[] = [];
+    let end = Infinity;
+    while (m.state.tick < end) {
+      const q = botIntents(m.state, bots);
+      inputs.push(q);
+      m.receive(0, { t: 'in', from: m.state.tick, intents: [q[0]] });
+      m.receive(1, { t: 'in', from: m.state.tick, intents: [q[1]] });
+      events.push(...snaps(m.advance(1), 0).flatMap((s) => s.events));
+      states.push(m.state);
+      if (end === Infinity && m.state.events.some((e) => e.kind === 'hit' && e.side === 0 && e.variant !== 'serve')) end = m.state.tick + 120;
+    }
+    return { inputs, states, events };
+  })();
+  /** Side 0's first Rally hit is on Tick `HIT`, stepped from `T` with `contact`. */
+  const HIT = ON_TIME.events.find((e) => isHit(e, 0))!.tick;
+  const T = HIT - 1;
+  /** Side 1's hit before it, and the Serve that began the Rally. */
+  const BEFORE = ON_TIME.events.filter((e) => isHit(e, 1) && e.tick < HIT).at(-1)!.tick;
+  const SERVE = ON_TIME.events.filter((e) => e.kind === 'hit' && e.variant === 'serve' && e.tick < HIT).at(-1)!.tick;
+
+  /**
+   * The on-time Match again to Tick `to`, Side 1 on time and Side 0's Intents through `edit`. With `late`, Side 0's
+   * Intents from Tick `from` on wait until the Court is on Tick `at`, then come together.
+   */
+  function replay(to: number, opts: { edit?: (tick: number, q: QIntent) => QIntent; late?: { from: number; at: number } } = {}) {
+    const m = court();
+    const side0 = ON_TIME.inputs.map((q, tick) => opts.edit?.(tick, q[0]) ?? q[0]);
+    const states: SimState[] = [m.state];
+    const events: SnapEvent[] = [];
+    const { from, at } = opts.late ?? { from: Infinity, at: Infinity };
+    for (let tick = 0; tick < to; tick++) {
+      m.receive(1, { t: 'in', from: tick, intents: [ON_TIME.inputs[tick]![1]] });
+      if (tick < from) m.receive(0, { t: 'in', from: tick, intents: [side0[tick]!] });
+      else if (tick >= at) m.receive(0, { t: 'in', from: Math.min(from, tick), intents: side0.slice(Math.min(from, tick), tick + 1) });
+      events.push(...snaps(m.advance(1), 0).flatMap((s) => s.events));
+      states.push(m.state);
+    }
+    return { m, states, events };
+  }
+
+  it('is on for both Sides, and the on-time Match hits by it', () => {
+    expect(court().state.match.config.contactMode).toEqual(['reported', 'reported']);
+    expect(reports(ON_TIME.inputs[T]![0])).toBe(true);
+    expect(SERVE).toBeLessThan(BEFORE);
+  });
+
+  it(`accepts a hit reported up to ${REWIND_TICKS} Ticks late, and comes out as if it came on time`, () => {
+    const r = replay(HIT + 60, { late: { from: T, at: T + REWIND_TICKS } });
+    expect(r.m.byTick.get(T)![0].contact).toBe(true);
+    expect(r.m.state).toEqual(ON_TIME.states[HIT + 60]);
+    // Until the report came, the Court's ball flew on; the rewind put the hit back, and it's told once.
+    expect(r.states[T + REWIND_TICKS - 1]!.ball.lastHitBy).toBe(1);
+    expect(r.events.filter((e) => isHit(e, 0))).toEqual([expect.objectContaining({ tick: HIT })]);
+  });
+
+  it('drops a hit reported past the window, and the ball flies on', () => {
+    const r = replay(HIT + 30, { late: { from: T, at: T + REWIND_TICKS + 1 } });
+    // The Intents after it land, but none of them reports a hit.
+    expect(r.m.byTick.get(T)![0].contact).toBeUndefined();
+    expect(r.m.byTick.get(T + 1)).toEqual([dequantizeIntent(ON_TIME.inputs[T + 1]![0]), dequantizeIntent(ON_TIME.inputs[T + 1]![1])]);
+    expect(r.events.some((e) => isHit(e, 0))).toBe(false);
+    expect(r.m.state.ball.lastHitBy).toBe(1);
+    expect(r.m.state.ball).not.toEqual(ON_TIME.states[HIT + 30]!.ball);
+  });
+
+  it('rejects a forged report while the ball is out of reach', () => {
+    // A modified client: Committed the moment Side 1 hit, and reporting a hit on every Tick after.
+    const r = replay(HIT + 10, { edit: (tick, q) => (tick === BEFORE ? forged(q, 'drive') : tick > BEFORE ? forged(q) : q) });
+    const hit = r.events.find((e) => isHit(e, 0))!;
+    if (hit.kind !== 'hit') throw new Error('no hit');
+    // The Sim checks Contact after the step's movement, so on the state each Tick stepped to: reach plus `REACH_SLACK`.
+    const inReach = (s: SimState, ball = s.ball.pos) => sweetSpotDistance(s.sides[0].players[0], endOf(s, 0), ball, simTuning, REACH_SLACK) !== null;
+    const eligible = (s: SimState) => s.ball.lastHitBy === 1 && endOfZ(s.ball.pos.z) === endOf(s, 0) && s.ball.bouncesSinceHit <= 1;
+    const refused = r.states.slice(BEFORE + 1, hit.tick).filter((s) => s.sides[0].players[0].commit !== null && eligible(s));
+    expect(refused.length).toBeGreaterThan(5);
+    expect(refused.every((s) => !inReach(s))).toBe(true);
+    // The hit it did get was in reach: an early swing is the Player's call, a long-armed one isn't.
+    expect(inReach(r.states[hit.tick]!, hit.pos)).toBe(true);
+    expect(hit.tick).toBeLessThanOrEqual(HIT);
+  });
+
+  it('rejects a forged report from a Player with no Commit', () => {
+    // A modified client that never presses in this Rally, but reports a hit on every Tick.
+    const r = replay(HIT + 10, { edit: (tick, q) => (tick >= SERVE ? forged(q, null) : q) });
+    expect(r.states.slice(SERVE, HIT + 10).every((s) => s.sides[0].players[0].commit === null)).toBe(true);
+    expect(r.events.some((e) => isHit(e, 0))).toBe(false);
+    expect(r.m.state.ball.lastHitBy).toBe(1);
+  });
+
+  it("rejects a forged report on the Player's own last hit", () => {
+    // Right after its hit, a modified client presses and reports on every Tick until Side 1 hits back.
+    const back = ON_TIME.events.find((e) => isHit(e, 1) && e.tick > HIT)?.tick ?? HIT + 60;
+    const to = Math.min(back - 1, HIT + 60);
+    const r = replay(to, { edit: (tick, q) => (tick >= HIT ? forged(q, 'drive') : q) });
+    expect(to - HIT).toBeGreaterThan(20);
+    expect(r.events.filter((e) => isHit(e, 0)).map((e) => e.tick)).toEqual([HIT]);
+    expect(r.m.state.ball).toEqual(ON_TIME.states[to]!.ball);
   });
 });

@@ -1,7 +1,7 @@
 // The Court's Match engine, pure: everything the Court does per Tick, with no Durable Object and no clock. The
 // Court decides when to step (`tickLoop`) and who to send to. Each Side's Intents wait here for their Tick; later
-// issues grow the input handling (Reported Contact, the Takeover Bot) behind the same interface.
-import { PRESETS, dequantizeIntent, fadeIntent, stillIntent, quantizeIntent, type CourtMsg, type InMsg, type PresetId, type QIntent, type SnapEvent } from '../../src/net';
+// issues grow the input handling (the Takeover Bot) behind the same interface.
+import { dequantizeIntent, onlineConfig, fadeIntent, stillIntent, quantizeIntent, type CourtMsg, type InMsg, type PresetId, type QIntent, type SnapEvent } from '../../src/net';
 import { createInitialState, step, type Intent, type SideIndex, type SimState, type SimTuning } from '../../src/sim';
 
 /** A Snapshot goes out once this many Ticks have run since the last one: 30 Hz. */
@@ -10,7 +10,7 @@ const SNAP_TICKS = 2;
 export const MAX_AHEAD_TICKS = 30;
 /** The Rewind window: an Intent this many Ticks late still lands on its Tick. */
 export const REWIND_TICKS = 15;
-/** The ring buffer keeps this many past states, twice the window, for Reported Contact (issue 10) to look back on. */
+/** The ring buffer keeps this many past states, twice the window. */
 const HISTORY_TICKS = 30;
 
 /** A message for the Player on `side`. */
@@ -59,8 +59,8 @@ interface Past {
   state: SimState;
   fills: readonly [Fill, Fill];
   intents: readonly [Intent, Intent];
-  /** Which Intents came from the client, and which the missing-input policy filled in. The Takeover Bot's log (14)
-   * and Reported Contact (10) read these. */
+  /** Which Intents came from the client, and which the missing-input policy filled in, for the Takeover Bot's log
+   * (14). */
   real: readonly [boolean, boolean];
 }
 
@@ -69,7 +69,12 @@ interface Past {
  * client hasn't had acknowledged, so a run starting past `ack + 1` means the client gave up the Ticks between, and
  * `ack` jumps over them. A Tick with no Intent repeats the last move and aim with no shot and no Contact, the move
  * fading to nothing over `DECAY_TICKS`, so a stalled or hidden tab stops. A Side with no input yet stands still.
- * Human Sides are `auto` until issue 10, so `contact` has no effect.
+ *
+ * Reported Contact (ADR-0004): both Sides are `reported` for the whole Match, so a Player hits only on a Tick whose
+ * Intent carries `contact`, from their own client. The Sim itself checks the report: the Player must be Committed, the
+ * ball theirs to hit and within reach plus `REACH_SLACK`, or nothing happens. The Court's only part is timing: a report
+ * inside the Rewind window rewinds like any late Intent, and one older is dropped, so the ball flies on. A filled-in
+ * Tick never carries `contact`.
  *
  * The Rewind window: an Intent up to `REWIND_TICKS` late replaces the fill, and the next `advance` re-steps from its
  * Tick, so the Match comes out as if it had come on time. Older ones are dropped. Moment events go out at once and are
@@ -82,7 +87,7 @@ export function createCourtMatch(opts: {
   /** Watches each step, re-steps included: the Tick stepped from and both Sides' Intents. */
   onStep?: (tick: number, intents: readonly [Intent, Intent]) => void;
 }): CourtMatch {
-  let state = createInitialState(opts.seed, PRESETS[opts.preset].config);
+  let state = createInitialState(opts.seed, onlineConfig(opts.preset));
   const feeds: [Feed, Feed] = [feed(), feed()];
   let fills: readonly [Fill, Fill] = [fill(), fill()];
   /** By Tick modulo `HISTORY_TICKS`. */

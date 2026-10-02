@@ -102,9 +102,10 @@ export class OnlineMatch implements MatchDriver {
     if (this.latest.phase === 'over') return;
     const told: Told[] = [];
     const msgs = inputFrame(this.sync, this.stream, this.now(), (tick) => {
-      const intent = this.opts.input();
-      told.push(...this.predictor.stamp(tick, intent));
-      return intent;
+      // The prediction calls the hit (Reported Contact), and the Court steps what it sends.
+      const stamped = this.predictor.stamp(tick, this.opts.input());
+      told.push(...stamped.told);
+      return stamped.intent;
     });
     for (const msg of msgs) this.opts.send(msg);
     this.tell(told);

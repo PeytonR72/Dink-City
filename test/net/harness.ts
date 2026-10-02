@@ -4,18 +4,16 @@
 import { DIFFICULTY, createBot } from '../../src/bot/bot';
 import { observe } from '../../src/bot/observe';
 import {
-  PRESETS,
   createClockSync,
   createInputStream,
   createPredictor,
   decode,
-  dequantizeIntent,
   inputFrame,
   encode,
   isCourtMsg,
   isIn,
   isPing,
-  quantizeIntent,
+  onlineConfig,
   type ClientMsg,
   type ClockSync,
   type CourtMsg,
@@ -72,7 +70,7 @@ export interface FakeClient {
   readonly stream: InputStream;
   /** This client's clock, which is skewed from the Court's. */
   clock(): number;
-  /** Every Intent stamped, by Tick, as the Court would step it. */
+  /** Every Intent stamped, by Tick, as sent: as the Court would step it, `contact` included. */
   readonly stamped: Map<number, Intent>;
   readonly presses: Press[];
   latest: SimState;
@@ -83,6 +81,8 @@ export interface FakeClient {
    * that Tick was stamped.
    */
   readonly predicted: Map<number, [Vec3, Vec3]>;
+  /** Where the prediction first put the ball, likewise. */
+  readonly predictedBall: Map<number, Vec3>;
   /** How far each Snapshot moved the predicted local Player (m, ground plane), in order. */
   readonly corrections: number[];
   /** Every event the client told its view, from its prediction or the Court, in order. */
@@ -102,6 +102,8 @@ export interface Harness {
   readonly applied: [Map<number, Intent>, Map<number, Intent>];
   /** Each Side's Player's position in the Court's states as last stepped, by the state's Tick. */
   readonly courtPos: [Map<number, Vec3>, Map<number, Vec3>];
+  /** The Court's states as last stepped, by Tick. */
+  readonly courtStates: Map<number, SimState>;
   /** Every event the Court sent, in order. */
   readonly courtEvents: SnapEvent[];
   /** Each Side's shot presses as the Court last stepped them, in Tick order. */
@@ -139,6 +141,7 @@ export function createHarness(opts: HarnessOptions): Harness {
 
   const applied: Harness['applied'] = [new Map(), new Map()];
   const courtPos: Harness['courtPos'] = [new Map(), new Map()];
+  const courtStates: Harness['courtStates'] = new Map();
   const courtEvents: SnapEvent[] = [];
   let resteps = 0;
   const presses = (side: SideIndex): Press[] =>
@@ -154,6 +157,7 @@ export function createHarness(opts: HarnessOptions): Harness {
       applied[1].set(tick, intents[1]);
       // `onStep` comes just before the step, so the Court's state is still the one at `tick`.
       for (const side of [0, 1] as const) courtPos[side].set(tick, { ...match.state.sides[side].players[0].pos });
+      courtStates.set(tick, match.state);
     },
   });
   const loop: TickLoop = createTickLoop({ hz: 60, maxCatchUp: 8 });
@@ -191,7 +195,7 @@ export function createHarness(opts: HarnessOptions): Harness {
       } else if (m.t === 'pong') c.sync.pong(m, c.clock());
     });
 
-  const start = createInitialState(matchSeed, PRESETS[preset].config);
+  const start = createInitialState(matchSeed, onlineConfig(preset));
   const client = (side: SideIndex, skew: number): FakeClient => ({
     side,
     sync: createClockSync(),
@@ -202,6 +206,7 @@ export function createHarness(opts: HarnessOptions): Harness {
     latest: start,
     predictor: createPredictor({ local: side, start, tuning: simTuning }),
     predicted: new Map(),
+    predictedBall: new Map(),
     corrections: [],
     heard: [],
     stopped: false,
@@ -221,14 +226,16 @@ export function createHarness(opts: HarnessOptions): Harness {
     each?.();
     if (c.stopped) return;
     const msgs = inputFrame(c.sync, c.stream, c.clock(), (tick) => {
-      const intent = drives[c.side]!(tick, c.latest);
-      // What the Court will step: the Intent after the wire.
-      const wire = dequantizeIntent(quantizeIntent(intent));
-      c.stamped.set(tick, wire);
-      if (wire.shot) c.presses.push({ tick, shot: wire.shot });
-      hear(c, c.predictor.stamp(tick, intent));
+      // The prediction calls the hit, and returns the Intent as the Court will step it.
+      const { intent, told } = c.predictor.stamp(tick, drives[c.side]!(tick, c.latest));
+      c.stamped.set(tick, intent);
+      if (intent.shot) c.presses.push({ tick, shot: intent.shot });
+      hear(c, told);
       const { curr } = c.predictor;
-      if (!c.predicted.has(curr.tick)) c.predicted.set(curr.tick, [{ ...curr.sides[0].players[0].pos }, { ...curr.sides[1].players[0].pos }]);
+      if (!c.predicted.has(curr.tick)) {
+        c.predicted.set(curr.tick, [{ ...curr.sides[0].players[0].pos }, { ...curr.sides[1].players[0].pos }]);
+        c.predictedBall.set(curr.tick, { ...curr.ball.pos });
+      }
       return intent;
     });
     for (const msg of msgs) toCourt(c.side, msg);
@@ -264,6 +271,7 @@ export function createHarness(opts: HarnessOptions): Harness {
     clients,
     applied,
     courtPos,
+    courtStates,
     courtEvents,
     get appliedPresses(): [Press[], Press[]] {
       return [presses(0), presses(1)];

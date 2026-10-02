@@ -91,6 +91,57 @@ describe('the netcode harness', () => {
     });
   }
 
+  for (const seed of [1, 2, 3]) {
+    it(`has the Court confirm every hit a client calls, at 150 ms, 30 ms jitter and 5% loss (seed ${seed})`, () => {
+      const h = createHarness({ seed, up: LOSSY, down: LOSSY });
+      h.run(60_000);
+      const end = h.match.state.tick - 60;
+      const hits = h.courtEvents.flatMap((e) => (e.kind === 'hit' && e.tick <= end ? [e] : []));
+      for (const c of h.clients) {
+        // A report on Tick T is a hit on the state Tick T steps to. Every one the client sent, the Court made.
+        const reported = [...c.stamped].flatMap(([tick, i]) => (i.contact && tick < end ? [tick + 1] : []));
+        const confirmed = hits.filter((e) => e.side === c.side && e.variant !== 'serve').map((e) => e.tick);
+        expect(confirmed.length).toBeGreaterThan(3);
+        expect(reported).toEqual(confirmed);
+      }
+
+      // In a Rally, each client's ball is the Court's, as first drawn. It's off only where the remote Player's hit is
+      // guessed (a Tick early or late, or not at all), and back within half a second, once that hit's Snapshot comes.
+      for (const c of h.clients) {
+        const remoteHits = hits.filter((e) => e.side !== c.side).map((e) => e.tick);
+        let checked = 0;
+        const off: number[] = [];
+        for (const [tick, p] of c.predictedBall) {
+          const court = h.courtStates.get(tick);
+          if (!court || court.phase !== 'rally' || tick < 120 || tick > end) continue;
+          checked++;
+          const { x, y, z } = court.ball.pos;
+          if (Math.hypot(p.x - x, p.y - y, p.z - z) >= NOISE && !remoteHits.some((t) => Math.abs(tick - t) <= 30)) off.push(tick);
+        }
+        expect(checked).toBeGreaterThan(500);
+        expect(off).toEqual([]);
+      }
+    });
+  }
+
+  it('drops hits reported past the window behind a long stall, and corrects each once, with nothing heard twice', () => {
+    // A 300 ms uplink freeze every 2.5 s holds some reports past the Rewind window. Those hits never happen on the
+    // Court; the client heard its swing once, from the prediction, and a Snapshot takes it back without a repeat.
+    const h = createHarness({ seed: 1, up: { ...LOSSY, stall: { every: 2_500, ms: 300 } }, down: LOSSY });
+    h.run(60_000);
+    const end = h.match.state.tick - 60;
+    let rejected = 0;
+    for (const c of h.clients) {
+      const confirmed = h.courtEvents.filter((e) => e.kind === 'hit' && e.side === c.side && e.variant !== 'serve' && e.tick <= end).map((e) => e.tick);
+      const reported = [...c.stamped].flatMap(([tick, i]) => (i.contact && tick < end ? [tick + 1] : []));
+      // Every hit the Court made, the client called; some it called, the Court dropped.
+      expect(confirmed.every((t) => reported.includes(t))).toBe(true);
+      rejected += reported.filter((t) => !confirmed.includes(t)).length;
+      expect(new Set(c.heard.map(eventKey)).size).toBe(c.heard.length);
+    }
+    expect(rejected).toBeGreaterThan(2);
+  });
+
   it('loses no shot press even at 20% loss and a 300 ms round trip', () => {
     const link: LinkSpec = { latency: 120, jitter: 60, loss: 0.2 };
     const h = createHarness({ seed: 9, up: link, down: link });

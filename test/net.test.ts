@@ -11,6 +11,7 @@ import {
   dequantizeIntent,
   encodeState,
   isPresetId,
+  onlineConfig,
   quantizeIntent,
   simHash,
   validateDisplayName,
@@ -151,6 +152,16 @@ describe('Presets', () => {
     expect(PRESETS.standard.config).toEqual(DEFAULT_MATCH);
     expect(DEFAULT_PRESET).toBe('standard');
     expect(Object.values(PRESETS).map((p) => p.label)).toEqual(['Quick', 'Standard', 'Long']);
+  });
+
+  it('run online with Reported Contact for both Sides, and offline still `auto`', () => {
+    for (const id of ['quick', 'standard', 'long'] as const) {
+      expect(onlineConfig(id)).toEqual({ ...PRESETS[id].config, contactMode: ['reported', 'reported'] });
+    }
+    // Each call is its own copy, so no Match can change another's rules.
+    expect(onlineConfig('quick').contactMode).not.toBe(onlineConfig('quick').contactMode);
+    expect(DEFAULT_MATCH.contactMode).toBeUndefined();
+    for (const p of Object.values(PRESETS)) expect('contactMode' in p.config).toBe(false);
   });
 
   it('guards Preset ids', () => {

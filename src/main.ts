@@ -11,7 +11,7 @@ import { Locker } from './menu/locker';
 import { CityMap } from './menu/map';
 import { Overlay, SettingsPanel } from './menu/menu';
 import { OnlinePanel } from './menu/online';
-import { COURT_CLOSE, PRESETS, readCourtCode, type CourtErrorCode, type PresetId } from './net';
+import { COURT_CLOSE, onlineConfig, readCourtCode, type CourtErrorCode, type PresetId } from './net';
 import type { CourtLink } from './online/connection';
 import { onlineOffered } from './online/gate';
 import { PRACTICE_STEPS, Practice, REPS_TO_PASS, createMachine } from './practice/practice';
@@ -364,7 +364,7 @@ async function goOnline(name: string, target: { preset: PresetId } | { code: str
       } else if (msg.t === 'start') {
         online = new OnlineMatch({
           local: side,
-          start: createInitialState(msg.seed, PRESETS[msg.preset].config),
+          start: createInitialState(msg.seed, onlineConfig(msg.preset)),
           view,
           input: () => (mode !== 'match' ? STILL : drive ? drive(online!.latest) : input.sample()),
           send: (m) => link.send(m),

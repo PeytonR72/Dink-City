@@ -8,16 +8,19 @@ import {
   PROTOCOL_VERSION,
   createClockSync,
   createInputStream,
+  createPredictor,
   decode,
   encode,
   inputFrame,
+  onlineConfig,
   simHash,
   type CourtMsg,
   type HelloMsg,
   type LobbyCourt,
   type LobbyMsg,
+  type Predictor,
 } from '../../src/net';
-import { TICK, type SideIndex, type SimState } from '../../src/sim';
+import { TICK, createInitialState, type SideIndex, type SimState } from '../../src/sim';
 import { simTuning } from '../../src/tuning';
 
 const args = process.argv.slice(2);
@@ -146,6 +149,7 @@ interface Played {
  * Plays one Side with an easy Bot on the latest Snapshot, the way `OnlineMatch` sends input: it syncs to the Court's
  * clock with pings, and every frame stamps an Intent for each Tick up to its input Tick, resending the unacknowledged.
  * The Bot thinks once per Tick stamped (it serves on an exact Tick), told that Tick, on the latest Snapshot's state.
+ * Its hits are called by the client's prediction (Reported Contact), as in `OnlineMatch`.
  */
 function botSide(c: Client, onSnap: (s: SimState) => void): Promise<Played> {
   if (c.first.t !== 'welcome') throw new Error(`not seated: ${JSON.stringify(c.first)}`);
@@ -153,14 +157,17 @@ function botSide(c: Client, onSnap: (s: SimState) => void): Promise<Played> {
   const sync = createClockSync();
   const stream = createInputStream();
   let bot: Bot | null = null;
+  let predictor: Predictor | null = null;
   let frames: ReturnType<typeof setInterval> | undefined;
   let snaps = 0;
   let late = 0;
   let state: SimState | null = null;
   const frame = () => {
-    if (bot === null || state === null) return;
-    const [b, s] = [bot, state];
-    for (const msg of inputFrame(sync, stream, performance.now(), (tick) => b.think({ ...observe(s, side), tick }))) c.ws.send(encode(msg));
+    if (bot === null || predictor === null || state === null) return;
+    const [b, p, s] = [bot, predictor, state];
+    for (const msg of inputFrame(sync, stream, performance.now(), (tick) => p.stamp(tick, b.think({ ...observe(s, side), tick })).intent)) {
+      c.ws.send(encode(msg));
+    }
   };
   return new Promise((resolve, reject) => {
     c.ws.addEventListener('close', (e) => {
@@ -170,13 +177,16 @@ function botSide(c: Client, onSnap: (s: SimState) => void): Promise<Played> {
     c.onMessage = (msg) => {
       if (msg.t === 'start') {
         bot = createBot(side, msg.seed + 1 + side, DIFFICULTY.easy, simTuning);
+        predictor = createPredictor({ local: side, start: createInitialState(msg.seed, onlineConfig(msg.preset)), tuning: simTuning });
         frames = setInterval(frame, TICK * 1000);
       } else if (msg.t === 'pong') sync.pong(msg, performance.now());
       else if (msg.t === 'snap') {
         if (state?.phase === 'over') late++;
         snaps++;
-        state = msg.state;
         stream.ack(msg.ack);
+        if (state !== null && msg.tick <= state.tick) return;
+        state = msg.state;
+        predictor?.reconcile(msg);
         onSnap(state);
       } else if (msg.t === 'over' && state !== null) {
         clearInterval(frames);

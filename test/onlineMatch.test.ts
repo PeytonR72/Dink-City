@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { quantizeIntent, type ClientMsg, type InMsg, type PingMsg, type SnapEvent } from '../src/net';
+import { onlineConfig, quantizeIntent, type ClientMsg, type InMsg, type PingMsg, type SnapEvent } from '../src/net';
 import type { MatchView } from '../src/match/driver';
 import { OnlineMatch, SNAP_DISTANCE } from '../src/match/online';
 import { localView } from '../src/render/localView';
@@ -22,7 +22,7 @@ function court(ticks: number, ...then: Intent[]): SimState {
 const x = (s: SimState, side: SideIndex = 0) => s.sides[side].players[0].pos.x;
 
 /** An online Match with a fake connection and view, logging what the view is told. */
-function online(local: SideIndex = 0, input: () => Intent = () => STILL) {
+function online(local: SideIndex = 0, input: () => Intent = () => STILL, start = START) {
   const sent: ClientMsg[] = [];
   /** This screen's clock, ms: one Tick per Tick-long frame. */
   let clock = 0;
@@ -38,7 +38,7 @@ function online(local: SideIndex = 0, input: () => Intent = () => STILL) {
     },
     draw: (prev, curr, alpha, live) => drawn.push({ prev, curr, alpha, live }),
   };
-  const match = new OnlineMatch({ local, start: START, view, input, send: (m) => sent.push(m), tuning: simTuning, now: () => clock });
+  const match = new OnlineMatch({ local, start, view, input, send: (m) => sent.push(m), tuning: simTuning, now: () => clock });
   const snap = (state: SimState, events: SnapEvent[] = [], ack = -1) =>
     match.receive({ t: 'snap', tick: state.tick, ack, state, last: [Q_STILL, Q_STILL], events });
   /** A frame of `dt` seconds. */
@@ -70,6 +70,24 @@ const dead = (tick: number): SnapEvent => ({ kind: 'dead', reason: 'net', loser:
 describe('OnlineMatch', () => {
   it('plays the given Side', () => {
     expect(online(1).match.local).toBe(1);
+  });
+
+  it('sends the hit its prediction calls, as Reported Contact', () => {
+    // A Rally on Tick 100: Side 0 Committed, the ball just hit by Side 1 and hanging at Side 0's sweet spot.
+    const start = structuredClone(createInitialState(1, onlineConfig('quick')));
+    start.phase = 'rally';
+    start.tick = 100;
+    start.sides[0].players[0].pos = { x: 0, y: 0, z: 4 };
+    start.sides[0].players[0].commit = { type: 'drive', tick: 90, bestDistance: null };
+    start.ball = { pos: { x: 0.2, y: 0.9, z: 3.55 }, vel: { x: 0, y: 0, z: 0 }, spin: 0, lastHitBy: 1, bouncesSinceHit: 1, hitTick: 80 };
+    const { match, ins, frame, pong } = online(0, () => STILL, start);
+    frame(TICK);
+    pong(99.2);
+    frame(TICK);
+    // The Court is on 100.2, so the first Tick stamped is 102; the prediction steps to it, Ticks 100 and 101 filled.
+    // The input sampled has no Contact; the prediction calls the hit, and sends it.
+    expect(ins()).toEqual([{ t: 'in', from: 102, intents: [[0, 0, 0, 0, 4]] }]);
+    expect(match.curr.ball.lastHitBy).toBe(0);
   });
 
   it('draws the Guest on Side 1 mirrored, at the bottom, as the renderer is told', () => {

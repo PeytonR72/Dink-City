@@ -1,15 +1,15 @@
 import { describe, expect, it, vi } from 'vitest';
 import { DIFFICULTY, createBot } from '../../src/bot/bot';
 import { observe } from '../../src/bot/observe';
-import { MAX_PREDICT_TICKS, PRESETS, createPredictor, dequantizeIntent, fadeIntent, quantizeIntent, type SnapEvent, type Told } from '../../src/net';
-import { createInitialState, step, type Intent, type SideIndex, type SimState } from '../../src/sim';
+import { MAX_PREDICT_TICKS, createPredictor, dequantizeIntent, fadeIntent, onlineConfig, quantizeIntent, type QIntent, type SnapEvent, type Told } from '../../src/net';
+import { autoContact, createInitialState, step, type Intent, type SideIndex, type SimState } from '../../src/sim';
 import { simTuning } from '../../src/tuning';
 
 // The Bot Match below takes a few seconds.
 vi.setConfig({ testTimeout: 60_000 });
 
 const SEED = 31;
-const START = createInitialState(SEED, PRESETS.quick.config);
+const START = createInitialState(SEED, onlineConfig('quick'));
 const STILL: Intent = { move: { x: 0, y: 0 }, aim: { x: 0, y: 0 }, shot: null };
 const RIGHT: Intent = { move: { x: 1, y: 0 }, aim: { x: 0, y: 0 }, shot: null };
 const UP: Intent = { move: { x: 0, y: 1 }, aim: { x: 0.5, y: 0 }, shot: null };
@@ -114,21 +114,115 @@ describe('the predictor', () => {
   });
 });
 
+/**
+ * The Court's timeline of a Bot Match: every state, and the Intents each Tick was stepped with, as clients that call
+ * their hits by the `auto` rule send them.
+ */
+function botMatch() {
+  const bots = [createBot(0, SEED + 1, DIFFICULTY.medium, simTuning), createBot(1, SEED + 2, DIFFICULTY.medium, simTuning)] as const;
+  const states: SimState[] = [START];
+  const pairs: [Intent, Intent][] = [];
+  while (states.at(-1)!.phase !== 'over') {
+    const s = states.at(-1)!;
+    const pair = [bots[0].think(observe(s, 0)), bots[1].think(observe(s, 1))].map((i) => dequantizeIntent(quantizeIntent(i))) as [Intent, Intent];
+    const calls = [autoContact(s, pair, 0, simTuning), autoContact(s, pair, 1, simTuning)];
+    pairs.push(pair.map((i, side) => (calls[side] ? { ...i, contact: true } : i)) as [Intent, Intent]);
+    states.push(step(s, pairs.at(-1)!, simTuning));
+  }
+  return { states, pairs };
+}
+const MATCH = botMatch();
+
+/** The Intent an input sampler gives: no Contact, which the predictor calls. */
+const sampled = (i: Intent): Intent => ({ move: i.move, aim: i.aim, shot: i.shot });
+const lastOf = (pair: [Intent, Intent]): [QIntent, QIntent] => [quantizeIntent(pair[0]), quantizeIntent(pair[1])];
+const eventsOf = (states: SimState[]): SnapEvent[] => states.flatMap((st) => st.events.map((e) => ({ ...e, tick: st.tick })));
+const rallyHits = (side: SideIndex) =>
+  eventsOf(MATCH.states).flatMap((e) => (e.kind === 'hit' && e.side === side && e.variant !== 'serve' ? [e] : []));
+const heardHit = (told: Told[], side: SideIndex) => told.some((t) => t.events.some((e) => e.kind === 'hit' && e.side === side));
+
+describe('Reported Contact in the predictor', () => {
+  it('reports Contact on exactly the Ticks the Court hits, calling each from the prediction alone', () => {
+    const { states, pairs } = MATCH;
+    for (const local of [0, 1] as const) {
+      // Stamped 6 Ticks ahead of the Snapshots, so each call is made from the prediction, not the Court's state.
+      const p = createPredictor({ local, start: START, tuning: simTuning });
+      const sent: Intent[] = [];
+      for (let tick = 0; tick < pairs.length; tick++) {
+        sent.push(p.stamp(tick, sampled(pairs[tick]![local])).intent);
+        const s = tick - 6;
+        if (s > 0 && s % 2 === 0) p.reconcile({ state: states[s]!, last: lastOf(pairs[s - 1]!), events: [] });
+      }
+      expect(rallyHits(local).length).toBeGreaterThan(20);
+      // Contact and all, each Intent goes as the Court stepped it.
+      expect(sent.flatMap((i, tick) => (i.contact ? [tick] : []))).toEqual(pairs.flatMap((pair, tick) => (pair[local].contact ? [tick] : [])));
+      expect(sent).toEqual(pairs.map((pair) => pair[local]));
+    }
+  });
+
+  it('reports nothing when there is no hit to make, and never passes on a `contact` of its own', () => {
+    const p = createPredictor({ local: 0, start: START, tuning: simTuning });
+    for (let t = 0; t < 30; t++) expect(p.stamp(t, t === 10 ? { ...RIGHT, shot: 'drive' } : RIGHT).intent.contact).toBeUndefined();
+    expect(p.stamp(30, { ...RIGHT, contact: true }).intent.contact).toBeUndefined();
+  });
+
+  it('guesses the remote Player calls their hits by the same rule', () => {
+    // A remote hit by a Player already Committed, on a Tick their Intent is the same as the one before, so the guess
+    // has it right.
+    const { states, pairs } = MATCH;
+    const same = (a: Intent, b: Intent) => JSON.stringify(quantizeIntent({ ...sampled(a), shot: null })) === JSON.stringify(quantizeIntent(sampled(b)));
+    const hit = rallyHits(1).find((e) => states[e.tick - 1]!.sides[1].players[0].commit !== null && same(pairs[e.tick - 2]![1], pairs[e.tick - 1]![1]))!;
+    expect(hit).toBeDefined();
+    const base = hit.tick - 1;
+    const p = createPredictor({ local: 0, start: START, tuning: simTuning });
+    p.reconcile({ state: states[base]!, last: lastOf(pairs[base - 1]!), events: [] });
+    const told: Told[] = [];
+    for (let t = base; t < hit.tick + 3; t++) told.push(...p.stamp(t, sampled(pairs[t]![0])).told);
+    // The ball flies off as the Court's did, but a remote hit is told only by the Court.
+    expect(p.curr.ball).toEqual(states[hit.tick + 3]!.ball);
+    expect(heardHit(told, 1)).toBe(false);
+  });
+
+  it('corrects a hit the Court rejected once, with no swing heard again', () => {
+    // Side 0's first Rally hit, predicted and heard on its Tick. `T` is the Tick it's stepped from.
+    const { states, pairs } = MATCH;
+    const hit = rallyHits(0)[0]!;
+    const T = hit.tick - 1;
+    const p = createPredictor({ local: 0, start: START, tuning: simTuning });
+    p.reconcile({ state: states[T - 10]!, last: lastOf(pairs[T - 11]!), events: [] });
+    const heard: SnapEvent[] = [];
+    for (let t = T - 10; t <= T + 8; t++) for (const told of p.stamp(t, sampled(pairs[t]![0])).told) heard.push(...told.events);
+    expect(heard.filter((e) => e.kind === 'hit' && e.side === 0).map((e) => e.tick)).toEqual([hit.tick]);
+
+    // A Snapshot from before the hit: the re-simulation hits again on the same Tick, which isn't heard twice.
+    const again = p.reconcile({ state: states[T - 2]!, last: lastOf(pairs[T - 3]!), events: [] });
+    expect(again.told).toEqual([]);
+    expect(p.curr.ball).toEqual(states[T + 9]!.ball);
+
+    // But the Court dropped the report, as one past the window: its ball flew on.
+    const flown: SimState[] = [];
+    let court = states[T]!;
+    for (let t = T; t < T + 6; t++) {
+      court = step(court, [t === T ? sampled(pairs[t]![0]) : pairs[t]![0], pairs[t]![1]], simTuning);
+      flown.push(court);
+    }
+    expect(court.ball.lastHitBy).toBe(1);
+    const corrected = p.reconcile({ state: court, last: lastOf(pairs[T + 5]!), events: eventsOf(flown) });
+    // The prediction takes the Court's unhit ball, and the report, now behind the Snapshot, can't hit it again.
+    let truth = court;
+    for (let t = T + 6; t <= T + 8; t++) truth = step(truth, pairs[t]!, simTuning);
+    expect(p.curr.ball).toEqual(truth.ball);
+    expect(heardHit(corrected.told, 0)).toBe(false);
+    expect(heardHit(p.reconcile({ state: truth, last: lastOf(pairs[T + 8]!), events: [] }).told, 0)).toBe(false);
+  });
+});
+
 /** The ball's flight is the same function of Tick on both ends, so a Bot Match replayed through the predictor tells its
  * local hits on time from the prediction, and never twice when the Court's copy comes. */
 describe('the predictor over a Bot Match', () => {
   it('tells each local hit once, on its Tick, and the outcomes only from the Court', () => {
     const local: SideIndex = 0;
-    const bots = [createBot(0, SEED + 1, DIFFICULTY.medium, simTuning), createBot(1, SEED + 2, DIFFICULTY.medium, simTuning)] as const;
-    // The Court's timeline: every state and the Intents each Tick was stepped with.
-    const states: SimState[] = [START];
-    const pairs: [Intent, Intent][] = [];
-    while (states.at(-1)!.phase !== 'over') {
-      const s = states.at(-1)!;
-      const pair: [Intent, Intent] = [bots[0].think(observe(s, 0)), bots[1].think(observe(s, 1))];
-      pairs.push(pair.map((i) => dequantizeIntent(quantizeIntent(i))) as [Intent, Intent]);
-      states.push(step(s, pairs.at(-1)!, simTuning));
-    }
+    const { states, pairs } = MATCH;
     const end = states.length - 1;
 
     // This client stamps 6 Ticks ahead of the Court and hears it 6 Ticks late, a Snapshot every 2 Ticks.
@@ -142,17 +236,15 @@ describe('the predictor over a Bot Match', () => {
     let snapped = 0;
     for (let c = 0; c <= end + DELAY; c++) {
       const tick = c + LEAD - 1;
-      if (tick < end) hear(p.stamp(tick, pairs[tick]![local]), c);
+      if (tick < end) hear(p.stamp(tick, sampled(pairs[tick]![local])).told, c);
       const s = c - DELAY;
       if (s > 0 && s <= end && s % 2 === 0) {
-        const events = states.slice(snapped + 1, s + 1).flatMap((st) => st.events.map((e) => ({ ...e, tick: st.tick })));
-        const last: [ReturnType<typeof quantizeIntent>, ReturnType<typeof quantizeIntent>] = [quantizeIntent(pairs[s - 1]![0]), quantizeIntent(pairs[s - 1]![1])];
-        hear(p.reconcile({ state: states[s]!, last, events }).told, c);
+        hear(p.reconcile({ state: states[s]!, last: lastOf(pairs[s - 1]!), events: eventsOf(states.slice(snapped + 1, s + 1)) }).told, c);
         snapped = s;
       }
     }
 
-    const truth = states.flatMap((st) => st.events.map((e) => ({ ...e, tick: st.tick })));
+    const truth = eventsOf(states);
     const key = (e: SnapEvent) => `${e.tick} ${e.kind} ${e.kind === 'hit' ? e.side : ''}`;
     const localHits = truth.filter((e) => e.kind === 'hit' && e.side === local);
     const heardHits = heard.filter((e) => e.kind === 'hit' && e.side === local);

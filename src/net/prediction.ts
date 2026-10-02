@@ -1,6 +1,6 @@
 // The Predicted timeline: a client's own run of the Sim, ahead of the Court, so its Player moves the moment a key is
 // pressed. Pure, so `OnlineMatch` and the netcode harness both drive it.
-import { endOf, endOfZ, other, step, type Intent, type SideIndex, type SimState, type SimTuning } from '../sim';
+import { autoContact, endOf, endOfZ, other, step, type Intent, type SideIndex, type SimState, type SimTuning } from '../sim';
 import { fadeIntent, stillIntent } from './fade';
 import { dequantizeIntent, quantizeIntent } from './intentCodec';
 import type { SnapEvent, SnapMsg } from './protocol';
@@ -16,6 +16,13 @@ export interface Told {
   events: SnapEvent[];
 }
 
+/** A stamped Tick: the Intent to send for it, and the events its prediction made. */
+export interface Stamped {
+  /** The Intent as the Court will step it: quantized, with `contact` set if the prediction hits on this Tick. */
+  intent: Intent;
+  told: Told[];
+}
+
 /** What a Snapshot did to the prediction. */
 export interface Reconciled {
   /** How far the local Player's predicted position moved, ground plane (m). */
@@ -28,13 +35,13 @@ export interface Predictor {
   /** The predicted states either side of the newest predicted Tick. */
   readonly prev: SimState;
   readonly curr: SimState;
-  /** The guess at the remote Player's Intent: their last one the Court stepped, with no shot. */
+  /** The guess at the remote Player's Intent: their last one the Court stepped, with no shot and no Contact. */
   readonly guess: Intent;
   /**
-   * The local Player's Intent for Tick `tick`, as stamped for the Court. Steps the prediction through that Tick, and
-   * returns the events to show at once.
+   * The local Player's Intent for Tick `tick`, to stamp for the Court. Reports Contact on it if the prediction hits on
+   * that Tick, steps the prediction through it, and returns the Intent to send with the events to show at once.
    */
-  stamp(tick: number, intent: Intent): Told[];
+  stamp(tick: number, intent: Intent): Stamped;
   /** A Snapshot: re-simulates from its state through every Tick stamped since. */
   reconcile(snap: Pick<SnapMsg, 'state' | 'last' | 'events'>): Reconciled;
 }
@@ -44,6 +51,13 @@ export interface Predictor {
  * stamped, quantized as the Court will step them (a Tick with none fades as on the Court). The remote Player steps
  * with a guess, which every Snapshot replaces with the truth. The Snapshot's `rng` comes along, so even a net cord
  * predicts exactly.
+ *
+ * Reported Contact (ADR-0004): each Tick stamped calls the local Player's hit by the rule the Court's Sim would use in
+ * `auto` (`autoContact`), on the predicted state, and sends it as the Intent's `contact`. The Court steps the same
+ * Intent from the same state, so it confirms the hit on the same Tick; one it can't confirm (the report came too late
+ * to rewind for, or the Court's state differed) a Snapshot corrects, and the re-simulation never hits again, because
+ * a `reported` hit fires only on the Tick reported. While the prediction waits for a Snapshot (`MAX_PREDICT_TICKS`), it
+ * calls no hits. The remote Player is guessed to call their hits the same way.
  *
  * Events: the local Player's `hit`, a `bounce` on the local half and `net` are told from the prediction the moment
  * they're predicted; every other event, the outcomes and the Fault included, only from the Court. Events are keyed by
@@ -83,13 +97,27 @@ export function createPredictor(opts: { local: SideIndex; start: SimState; tunin
     return true;
   };
 
+  /**
+   * Whether `side` hits from `s` on this step by the `auto` rule: the Contact to report. `checkContact` skips a Player
+   * with no Commit after the step's presses, so with none and no press now the probe step is skipped.
+   */
+  const callsHit = (s: SimState, intents: readonly [Intent, Intent], side: SideIndex) =>
+    (s.sides[side].players[0].commit !== null || intents[side].shot !== null) && autoContact(s, intents, side, tuning);
+
+  /** Both Sides' Intents for the step from `curr`: the local one stamped, and the guess, calling its own hits. */
+  const intentsNow = (): [Intent, Intent] => {
+    const intents: [Intent, Intent] = [guess, guess];
+    intents[local] = localAt(curr.tick);
+    if (callsHit(curr, intents, remote)) intents[remote] = { ...guess, contact: true };
+    return intents;
+  };
+
   /** Steps the prediction to `head`, unless that's too far to catch up. */
   const advance = (): Told[] => {
     const out: Told[] = [];
     if (head - curr.tick > MAX_PREDICT_TICKS) return out;
     while (curr.tick < head && curr.phase !== 'over') {
-      const intents: [Intent, Intent] = [guess, guess];
-      intents[local] = localAt(curr.tick);
+      const intents = intentsNow();
       prev = curr;
       curr = step(curr, intents, tuning);
       const s = curr;
@@ -110,9 +138,19 @@ export function createPredictor(opts: { local: SideIndex; start: SimState; tunin
       return guess;
     },
     stamp(tick, intent) {
-      stamped.set(tick, dequantizeIntent(quantizeIntent(intent)));
+      // Up to `tick` first, fading any Ticks skipped, so the hit is called from the state the Tick steps from.
+      head = Math.max(head, tick);
+      const told = advance();
+      let wire = dequantizeIntent(quantizeIntent({ ...intent, contact: false }));
+      if (curr.tick === tick) {
+        const intents = intentsNow();
+        intents[local] = wire;
+        if (callsHit(curr, intents, local)) wire = { ...wire, contact: true };
+      }
+      stamped.set(tick, wire);
       head = Math.max(head, tick + 1);
-      return advance();
+      told.push(...advance());
+      return { intent: wire, told };
     },
     reconcile(snap) {
       const before = curr.sides[local].players[0].pos;
