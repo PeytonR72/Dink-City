@@ -10,6 +10,7 @@ import {
   isPing,
   isPresetId,
   isReady,
+  isRematch,
   simHash,
   validateDisplayName,
   type CourtErrorCode,
@@ -70,6 +71,8 @@ export class Court extends Server<Env> {
   /** What the Lobby lists, and the number of the last report sent to it. */
   private info: CourtInfo | null = null;
   private reports = 0;
+  /** The Court has told the Lobby `end`: once, whichever Match ends first, since a rematch never lists it again. */
+  private ended = false;
   private heartbeat: ReturnType<typeof setInterval> | null = null;
 
   /** Called by the Worker over RPC. Only the first call provisions; any later one is refused and changes nothing. */
@@ -100,6 +103,7 @@ export class Court extends Server<Env> {
     if (msg !== null && isIn(msg)) return this.input(conn, msg);
     if (msg !== null && isPing(msg)) return this.ping(conn, msg);
     if (msg !== null && isLeave(msg)) return this.leave(conn);
+    if (msg !== null && isRematch(msg)) return this.rematch(conn);
     this.send(conn, { t: 'error', code: 'bad_message' });
   }
 
@@ -140,10 +144,12 @@ export class Court extends Server<Env> {
     this.gate = starting.seated(this.gate, result.side, result.token, Date.now());
     this.schedule();
     this.send(conn, { t: 'welcome', side: result.side, token: result.token, preset: this.setup.preset, players: seats.players(next) });
-    // A Player reloading mid-Match rebuilds from `start` and the current Snapshot, and learns if it's already over.
+    // A Player reloading mid-Match rebuilds from `start` and the current Snapshot, and learns if it's already over, and
+    // who has asked for a rematch.
     if (this.match === null) return this.maybeStart();
     this.send(conn, this.startMsg());
     for (const msg of this.match.current(result.side)) this.send(conn, msg);
+    next.rematch?.asked.forEach((asked, side) => asked && this.send(conn, { t: 'rematch', side: side as SideIndex }));
   }
 
   private ready(conn: Connection): void {
@@ -168,13 +174,28 @@ export class Court extends Server<Env> {
     this.send(conn, { t: 'pong', id: msg.id, clientTime: msg.clientTime, courtTick: this.match.state.tick + phase });
   }
 
-  /** A Player leaving for good: their grace starts now, not when the socket times out. */
+  /**
+   * A Player leaving for good: during the Match their grace starts now, not when the socket times out; once it's over,
+   * the Court closes, telling the other Player.
+   */
   private leave(conn: Connection): void {
     if (this.sideOf(conn) === null) return;
-    this.left(conn);
+    this.left(conn, true);
     try {
       conn.close(1000, 'left');
     } catch {}
+  }
+
+  /** A Player asks to play again once the Match is over. Both are told; once both have asked, the next Match starts. */
+  private rematch(conn: Connection): void {
+    const side = this.sideOf(conn);
+    if (side === null || this.seats === null) return;
+    const { seats: next, start } = seats.askRematch(this.seats, side);
+    if (next === this.seats) return;
+    this.seats = next;
+    this.schedule();
+    this.toPlayers({ t: 'rematch', side });
+    if (start) this.play(crypto.getRandomValues(new Uint32Array(1))[0]!);
   }
 
   /** Tells each Player about their opponent's seat, wherever it changed since `before` (once the Match has started). */
@@ -208,12 +229,22 @@ export class Court extends Server<Env> {
     this.seats = seats.start(this.seats);
     this.stopHeartbeat();
     this.report('start');
+    this.play(this.setup.seed);
+  }
+
+  /**
+   * Starts a Match on `seed` with the Court's Preset and seats: the first, or a rematch. A rematch tells the Lobby
+   * nothing, since the Court left its list at the start.
+   */
+  private play(seed: number): void {
+    if (this.setup === null) return;
+    this.setup = { ...this.setup, seed };
     this.match = createCourtMatch({ ...this.setup, tuning: simTuning });
     this.loop = createTickLoop({ hz: HZ, maxCatchUp: MAX_CATCH_UP });
     this.loop.advance(Date.now());
-    for (const conn of this.getConnections()) if (this.holders.includes(conn.id)) this.send(conn, this.startMsg());
+    this.toPlayers(this.startMsg());
     this.interval = setInterval(() => this.tick(), 1000 / HZ);
-    console.log(`[court ${this.name}] Match started (${this.setup.preset}, seed ${this.setup.seed})`);
+    console.log(`[court ${this.name}] Match started (${this.setup.preset}, seed ${seed})`);
   }
 
   /** One interval callback: the timestamp is taken first, because the clock doesn't move while the Sim runs. */
@@ -229,8 +260,16 @@ export class Court extends Server<Env> {
     }
     if (this.match.over && this.interval !== null) {
       this.stopTicking(`the Match is over, ${this.match.state.match.points.join('-')}`);
-      this.report('end');
+      // The Court stays up for a rematch, until a Player leaves or `REMATCH_MS` runs out.
+      if (this.seats !== null) this.seats = seats.over(this.seats, Date.now());
+      this.schedule();
+      this.reportEnd();
     }
+  }
+
+  /** Sends `msg` to both seated Players. */
+  private toPlayers(msg: CourtMsg): void {
+    for (const conn of this.getConnections()) if (this.holders.includes(conn.id)) this.send(conn, msg);
   }
 
   /** `start`, naming both Players. Only called once the Court is provisioned. */
@@ -250,14 +289,18 @@ export class Court extends Server<Env> {
     console.log(`[court ${this.name}] tick interval stopped at Tick ${this.match?.state.tick}: ${why}`);
   }
 
-  /** Runs once per connection: onClose and onError can both fire, and the second finds no seat. */
-  private left(conn: Connection): void {
+  /**
+   * Runs once per connection: onClose and onError can both fire, and the second finds no seat. `leaving`: the Player
+   * said `leave` (`seats.leave`) rather than just disconnecting, which once the Match is over closes the Court.
+   */
+  private left(conn: Connection, leaving = false): void {
     const side = this.holders.indexOf(conn.id);
     if (side === -1 || this.seats === null) return;
     this.holders[side] = null;
     const before = this.seats;
-    this.seats = seats.disconnect(before, side as SideIndex, Date.now());
+    this.seats = (leaving ? seats.leave : seats.disconnect)(before, side as SideIndex, Date.now());
     this.tellPeers(before);
+    if (this.seats.closed) return this.close(before, 'a Player left after the Match');
     this.gate = starting.unready(this.gate, side as SideIndex);
     this.match?.disconnect(side as SideIndex);
     this.schedule();
@@ -278,7 +321,7 @@ export class Court extends Server<Env> {
     this.seats = seats.expire(before, Date.now());
     for (const side of [0, 1] as const) if (this.seats.seats[side]?.status === 'gone') this.match?.gone(side);
     this.tellPeers(before);
-    if (this.seats.closed) this.close(before);
+    if (this.seats.closed) this.close(before, closeReason(before, Date.now()));
     else if (this.match !== null && !this.match.over && this.seats.seats.some((seat) => seat?.status === 'gone')) {
       // Until the Takeover Bot (issue 14), a Match can't go on with one Player: it ends, and the Court closes.
       this.seats = { ...this.seats, closed: true };
@@ -289,7 +332,8 @@ export class Court extends Server<Env> {
 
   /**
    * Ends the Court. Before the start that's the Host leaving (or never connecting), which a seated Guest is told, or
-   * 30 minutes with no Guest; after it, both Players being gone, or one before the Match is over.
+   * 30 minutes with no Guest; after it, both Players being gone, or one before the Match is over; once it's over, either
+   * being gone, or no rematch in time.
    */
   private close(before: seats.Seats, reason = 'both Players are gone'): void {
     const guest = this.holders[1] === null ? undefined : this.getConnection(this.holders[1]);
@@ -298,8 +342,7 @@ export class Court extends Server<Env> {
     this.clearStartTimer();
     this.holders = [null, null];
     if (before.started) {
-      // A Match that ended has already reported `end`.
-      if (this.match?.over !== true) this.report('end');
+      this.reportEnd();
     } else {
       const hostLeft = before.seats[0]?.status !== 'connected';
       console.log(`[court ${this.name}] closed before the start: ${hostLeft ? 'the Host left' : 'no Guest came'}`);
@@ -312,6 +355,12 @@ export class Court extends Server<Env> {
   private stopHeartbeat(): void {
     if (this.heartbeat !== null) clearInterval(this.heartbeat);
     this.heartbeat = null;
+  }
+
+  private reportEnd(): void {
+    if (this.ended) return;
+    this.ended = true;
+    this.report('end');
   }
 
   /** Tells the Lobby, best-effort: a failed report is logged, and the entry heals by expiring. */
@@ -338,4 +387,10 @@ export class Court extends Server<Env> {
     this.send(conn, { t: 'error', code });
     conn.close(COURT_CLOSE, code);
   }
+}
+
+/** Why `seats.expire` closed a Court that had `before`, for the log. */
+function closeReason(before: seats.Seats, now: number): string {
+  if (before.rematch === null) return 'both Players are gone';
+  return seats.rematchTimedOut(before, now) ? 'no rematch in time' : 'a Player left after the Match';
 }

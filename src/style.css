@@ -697,7 +697,7 @@ body[data-practice='true'] #scoreboard {
   display: none;
 }
 
-/* After an online Match: just the way back, under the result banner. */
+/* After an online Match: the rematch and the way back, under the result banner. */
 #online-over {
   inset: auto 0 12% 0;
   padding: 0;
@@ -707,4 +707,17 @@ body[data-practice='true'] #scoreboard {
 
 #online-over button {
   pointer-events: auto;
+}
+
+#online-over button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.rematch-status {
+  min-height: 1.4em;
+  margin: 0;
+  font-size: 18px;
+  font-weight: 800;
+  color: #ffd23f;
 }

@@ -10,6 +10,11 @@ import {
   players,
   provision,
   changes,
+  askRematch,
+  leave,
+  over,
+  REMATCH_MS,
+  rematchTimedOut,
   start,
   type Seats,
 } from '../../party/src/courtSeats';
@@ -199,5 +204,74 @@ describe('Court seats', () => {
   it('tells nothing before the start: the waiting panel shows who is seated', () => {
     const s = full();
     expect(changes(s, disconnect(s, 1, T0))).toEqual([]);
+  });
+});
+
+describe('a rematch', () => {
+  /** A Match that ended at T0. */
+  const ended = () => over(start(full()), T0);
+
+  it('takes no ask while the Match is on', () => {
+    const playing = start(full());
+    expect(askRematch(playing, 0)).toEqual({ seats: playing, start: false });
+  });
+
+  it('starts once both Players have asked, and the next Match can end again', () => {
+    const one = askRematch(ended(), 1);
+    expect(one.start).toBe(false);
+    expect(one.seats.rematch?.asked).toEqual([false, true]);
+    // Asking twice changes nothing.
+    expect(askRematch(one.seats, 1)).toEqual({ seats: one.seats, start: false });
+    expect(askRematch(one.seats, 1).seats).toBe(one.seats);
+    const both = askRematch(one.seats, 0);
+    expect(both.start).toBe(true);
+    expect(both.seats.rematch).toBeNull();
+    expect(both.seats.closed).toBe(false);
+    expect(nextExpiry(both.seats)).toBeNull();
+    expect(over(both.seats, T0 + 5_000).rematch).toEqual({ since: T0 + 5_000, asked: [false, false] });
+  });
+
+  it('takes no ask from a seat that is away', () => {
+    const away = disconnect(ended(), 0, T0);
+    expect(askRematch(away, 0).seats).toEqual(away);
+  });
+
+  it('closes the Court when a Player leaves while the other waits, and tells the other they are gone', () => {
+    const waiting = askRematch(ended(), 0).seats;
+    const left = leave(waiting, 1, T0 + 1_000);
+    expect(left.closed).toBe(true);
+    expect(left.seats[1]).toMatchObject({ status: 'gone' });
+    expect(changes(waiting, left)).toEqual([{ side: 1, status: 'gone' }]);
+    expect(askRematch(left, 0).start).toBe(false);
+  });
+
+  it('closes the Court when a Player who closed their tab never comes back', () => {
+    const away = disconnect(askRematch(ended(), 0).seats, 1, T0 + 1_000);
+    expect(away.closed).toBe(false);
+    expect(nextExpiry(away)).toBe(T0 + 1_000 + GRACE_MS);
+    const gone = expire(away, T0 + 1_000 + GRACE_MS);
+    expect(gone.closed).toBe(true);
+    expect(changes(away, gone)).toEqual([{ side: 1, status: 'gone' }]);
+  });
+
+  it('keeps a Player who reloads while the other waits', () => {
+    const away = disconnect(askRematch(ended(), 0).seats, 1, T0 + 1_000);
+    const back = join(away, { name: 'Guest', token: 'guest-tok' }, 'unused');
+    expect(back.result).toEqual({ ok: true, side: 1, token: 'guest-tok' });
+    expect(askRematch(back.seats, 1).start).toBe(true);
+  });
+
+  it('closes the Court when no rematch comes in time', () => {
+    const waiting = askRematch(ended(), 0).seats;
+    expect(nextExpiry(waiting)).toBe(T0 + REMATCH_MS);
+    expect(expire(waiting, T0 + REMATCH_MS - 1).closed).toBe(false);
+    expect(expire(waiting, T0 + REMATCH_MS).closed).toBe(true);
+    expect(rematchTimedOut(waiting, T0 + REMATCH_MS - 1)).toBe(false);
+    expect(rematchTimedOut(waiting, T0 + REMATCH_MS)).toBe(true);
+  });
+
+  it('leaving during the Match starts the grace, as a disconnect does', () => {
+    const playing = start(full());
+    expect(leave(playing, 1, T0)).toEqual(disconnect(playing, 1, T0));
   });
 });

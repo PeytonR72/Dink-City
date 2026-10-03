@@ -209,8 +209,36 @@ const onlineStatus = new Overlay(
 );
 onlineStatus.on('#leave', () => quitToMenu());
 
-const onlineOver = new Overlay('online-over', '<button id="back-to-map" class="primary">Back to map</button>');
+/** An online Match is over: both Players press Rematch to play again in the same Court. */
+const onlineOver = new Overlay(
+  'online-over',
+  `<p class="rematch-status"></p>
+  <button id="rematch" class="primary">Rematch</button>
+  <button id="back-to-map">Back to map</button>`,
+);
+// The Court tells both Players of each ask, this one's included, and the panel shows what it said.
+onlineOver.on('#rematch', () => court?.send({ t: 'rematch' }));
 onlineOver.on('#back-to-map', () => quitToMenu());
+
+/** The rematch as the Court has told this screen: who has asked, and whether the opponent left instead. */
+interface RematchOffer {
+  local: SideIndex;
+  opponent: string;
+  asked: [boolean, boolean];
+  left: boolean;
+}
+
+/** The Match-over panel's line and button for `offer`. */
+function showRematch({ local, opponent, asked, left }: RematchOffer) {
+  const mine = asked[local];
+  const theirs = asked[other(local)];
+  let text = '';
+  if (left) text = `${opponent} left.`;
+  else if (mine && !theirs) text = `Waiting for ${opponent}…`;
+  else if (theirs && !mine) text = `${opponent} wants a rematch`;
+  onlineOver.el.querySelector('.rematch-status')!.textContent = text;
+  onlineOver.el.querySelector<HTMLButtonElement>('#rematch')!.disabled = left || mine;
+}
 
 /** The Difficulty of the Match in play, for its star. */
 let difficulty = settings().difficulty;
@@ -369,10 +397,12 @@ async function goOnline(name: string, target: { preset: PresetId } | { code: str
   let side: SideIndex = 0;
   let online: InstanceType<typeof OnlineMatch> | null = null;
   let opponent = 'Player';
-  /** The opponent left during the Match, which ended it: the Court closing is no news. */
+  /** The opponent left, which ended the Match or the wait for a rematch: the Court closing is no news. */
   let peerLeft = false;
   /** The Court said the Match is over, which a Snapshot may not have shown yet. */
   let over = false;
+  const isOver = () => over || online?.latest.phase === 'over';
+  let offer: RematchOffer = { local: 0, opponent, asked: [false, false], left: false };
   const link = joinCourt(code, name, {
     onMessage(msg) {
       if (msg.t === 'welcome') {
@@ -382,6 +412,9 @@ async function goOnline(name: string, target: { preset: PresetId } | { code: str
         // The Venue on show is loaded already. It isn't part of the Preset: each screen shows its own.
         link.send({ t: 'ready' });
       } else if (msg.t === 'start') {
+        // The first Match, a rematch, or the one in play after a reload: each starts the screen afresh.
+        over = false;
+        peerLeft = false;
         online = new OnlineMatch({
           local: side,
           start: createInitialState(msg.seed, onlineConfig(msg.preset)),
@@ -397,6 +430,8 @@ async function goOnline(name: string, target: { preset: PresetId } | { code: str
         renderer.setColors(other(side), botColors(venue));
         renderer.cut();
         opponent = msg.players[other(side)]?.name ?? 'Player';
+        offer = { local: side, opponent, asked: [false, false], left: false };
+        showRematch(offer);
         hud.setOnline(side, opponent);
         // A Player who reloads may find their opponent away.
         hud.setPeer(msg.players[other(side)]?.connected === false ? 'grace' : null);
@@ -407,20 +442,29 @@ async function goOnline(name: string, target: { preset: PresetId } | { code: str
       else if (msg.t === 'pong') online?.pong(msg);
       else if (msg.t === 'peer') {
         hud.setPeer(msg.status);
-        // Until the Takeover Bot (issue 14), the Match can't go on without them, and the Court ends it.
-        if (msg.status === 'gone' && online !== null && !over && online.latest.phase !== 'over') {
-          peerLeft = true;
-          showOnlineStatus(`${opponent} left.`);
-          setTimeout(quitToMenu, PEER_LEFT_MS);
+        if (msg.status !== 'gone' || online === null) return;
+        peerLeft = true;
+        // After the Match there's no rematch, and the Court closes; the Match-over panel says so.
+        if (isOver()) {
+          offer.left = true;
+          showRematch(offer);
+          return;
         }
+        // Until the Takeover Bot (issue 14), the Match can't go on without them, and the Court ends it.
+        showOnlineStatus(`${opponent} left.`);
+        setTimeout(quitToMenu, PEER_LEFT_MS);
       } else if (msg.t === 'over') over = true;
+      else if (msg.t === 'rematch') {
+        offer.asked[msg.side] = true;
+        showRematch(offer);
+      }
       else if (msg.t === 'error') fail(COURT_ERRORS[msg.code]);
     },
     onClose(closeCode, reason) {
       // A refusal already said why.
       if (peerLeft || Object.hasOwn(COURT_ERRORS, reason)) return;
       if (reason === 'replaced') fail('This seat is being played in another tab.');
-      else if (closeCode === COURT_CLOSE) fail('The Court has closed.');
+      else if (closeCode === COURT_CLOSE) fail(isOver() ? 'No rematch: the Court has closed.' : 'The Court has closed.');
       else fail(match === offline ? 'Lost the connection to the Court.' : 'Lost the connection to the Court. Reload to rejoin.');
     },
   });
@@ -565,8 +609,10 @@ function update(dt: number) {
     else if (mode === 'paused') setMode('match');
     else if (mode === 'locker' || mode === 'lobby') setMode('menu');
   }
-  // Online there's no rematch yet (issue 13): the way on is back to the map.
-  onlineOver.el.hidden = !(mode === 'match' && match !== offline && match.curr.phase === 'over');
+  // Online the Match-over panel offers a rematch or the way back to the map, in place of the shot press offline.
+  const onlineOverShown = mode === 'match' && match !== offline && match.curr.phase === 'over';
+  if (onlineOverShown && !onlineOver.shown) onlineOver.show();
+  else if (!onlineOverShown) onlineOver.hide();
 
   if (mode === 'menu') {
     // The map is drawn instead of the court, which keeps its last frame behind the menu.

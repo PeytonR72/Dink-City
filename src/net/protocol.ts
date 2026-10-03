@@ -4,7 +4,7 @@ import { isQIntent, type QIntent } from './intentCodec';
 import { isPresetId, type PresetId } from './presets';
 
 /** Bump when a message changes shape. The handshake refuses a mismatch with `version`. */
-export const PROTOCOL_VERSION = 6;
+export const PROTOCOL_VERSION = 7;
 
 /**
  * Why the Court refused or dropped a client. Every code but `bad_message` closes the socket. `host_left`: the Host
@@ -76,8 +76,13 @@ export interface LeaveMsg {
   t: 'leave';
 }
 
+/** Once the Match is over, the Player asks to play again in the same Court. The next Match starts once both have. */
+export interface RematchMsg {
+  t: 'rematch';
+}
+
 /** Client → Court. */
-export type ClientMsg = HelloMsg | ReadyMsg | InMsg | PingMsg | LeaveMsg;
+export type ClientMsg = HelloMsg | ReadyMsg | InMsg | PingMsg | LeaveMsg | RematchMsg;
 
 /** A Sim event in a Snapshot, labeled with the Tick whose step emitted it. */
 export type SnapEvent = SimEvent & { tick: number };
@@ -91,6 +96,7 @@ export type SnapEvent = SimEvent & { tick: number };
  * and every event since the previous `snap`. `pong` answers a `ping` with the Court's Tick when it was sent,
  * fractional: the Ticks stepped plus how far the Court's clock is into the next. `peer` tells a Player, once the
  * Match has started, that the Player on `side` disconnected (`grace`), came back (`connected`), or is `gone` for good.
+ * `rematch` tells both Players that the Player on `side` asked for a rematch; once both have, a new `start` follows.
  */
 export type CourtMsg =
   | { t: 'welcome'; side: SideIndex; token: string; preset: PresetId; players: [CourtPlayer | null, CourtPlayer | null] }
@@ -99,7 +105,8 @@ export type CourtMsg =
   | SnapMsg
   | { t: 'over'; winner: SideIndex }
   | PongMsg
-  | { t: 'peer'; side: SideIndex; status: PeerStatus };
+  | { t: 'peer'; side: SideIndex; status: PeerStatus }
+  | { t: 'rematch'; side: SideIndex };
 
 /** A seated Player's link to the Court: `grace` while their seat waits for them to come back. */
 export type PeerStatus = (typeof PEER_STATUSES)[number];
@@ -165,6 +172,11 @@ export function isLeave(v: unknown): v is LeaveMsg {
   return isTagged(v) && v.t === 'leave';
 }
 
+/** Guards a `rematch` from the wire. */
+export function isRematch(v: unknown): v is RematchMsg {
+  return isTagged(v) && v.t === 'rematch';
+}
+
 /** Guards an `in` from the wire: a whole first Tick and 1 to `MAX_IN_INTENTS` well-formed quantized Intents. */
 export function isIn(v: unknown): v is InMsg {
   if (!isTagged(v) || v.t !== 'in') return false;
@@ -217,6 +229,8 @@ export function isCourtMsg(v: unknown): v is CourtMsg {
       return Number.isSafeInteger(m.id) && Number.isFinite(m.clientTime) && Number.isFinite(m.courtTick);
     case 'peer':
       return isSide(m.side) && (PEER_STATUSES as readonly unknown[]).includes(m.status);
+    case 'rematch':
+      return isSide(m.side);
   }
   return false;
 }

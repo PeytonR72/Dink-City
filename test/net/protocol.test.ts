@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { MAX_IN_INTENTS, PROTOCOL_VERSION, decode, encode, isCourtMsg, isHello, isIn, isLeave, isLobbyMsg, isPing, isReady, type CourtMsg, type LobbyMsg } from '../../src/net';
+import { MAX_IN_INTENTS, PROTOCOL_VERSION, decode, encode, isCourtMsg, isHello, isIn, isLeave, isLobbyMsg, isPing, isReady, isRematch, type CourtMsg, type LobbyMsg } from '../../src/net';
 import { createInitialState } from '../../src/sim';
 
 const hello = { t: 'hello', name: 'Pat', protocolVersion: PROTOCOL_VERSION, simHash: '0123abcd' };
@@ -44,6 +44,12 @@ describe('the Court protocol', () => {
     expect(isLeave({ t: 'leave' })).toBe(true);
     expect(isLeave({ t: 'ready' })).toBe(false);
     expect(isLeave(null)).toBe(false);
+  });
+
+  it('guards a rematch', () => {
+    expect(isRematch({ t: 'rematch' })).toBe(true);
+    expect(isRematch({ t: 'leave' })).toBe(false);
+    expect(isRematch(null)).toBe(false);
   });
 
   it('guards an in', () => {
@@ -93,6 +99,8 @@ describe('the Court protocol', () => {
       { t: 'peer', side: 1, status: 'grace' },
       { t: 'peer', side: 0, status: 'connected' },
       { t: 'peer', side: 1, status: 'gone' },
+      { t: 'rematch', side: 0 },
+      { t: 'rematch', side: 1 },
     ];
     for (const msg of good) expect(isCourtMsg(decode(encode(msg))), msg.t).toBe(true);
 
@@ -118,6 +126,8 @@ describe('the Court protocol', () => {
       { t: 'peer', side: 2, status: 'gone' },
       { t: 'peer', side: 0, status: 'away' },
       { t: 'peer', side: 0 },
+      { t: 'rematch' },
+      { t: 'rematch', side: 2 },
     ];
     for (const msg of bad) expect(isCourtMsg(msg), JSON.stringify(msg)).toBe(false);
   });

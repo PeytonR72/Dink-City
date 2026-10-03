@@ -64,7 +64,7 @@ The physical playing area. For the online room, see **Court** under Online play.
 
 ### Online play (see ADR-0004)
 
-- **Court**: an online room hosting one Match between two Players: one Durable Object, named by its **Court code** (also shared as a `?court=` link). The Court runs the authoritative Sim. The name is reserved for the room, not how it was found, so a future open world could reuse Courts.
+- **Court**: an online room hosting one Match between two Players, and then any rematches they agree to: one Durable Object, named by its **Court code** (also shared as a `?court=` link). The Court runs the authoritative Sim. The name is reserved for the room, not how it was found, so a future open world could reuse Courts.
 - **Lobby**: the directory of open Courts, one singleton that menu clients watch live. Courts report to it; an entry a Court stops reporting expires on its own. A Court leaves the list once it's full.
 - **Host**: the Player who created a Court and picked its Preset. **Guest**: the Player who joined it.
 - **Preset**: a Court's fixed rules, picked at creation: **Quick** (1 Game, Rally scoring), **Standard** (1 Game, Side-out scoring) or **Long** (best of 3, Side-out scoring).

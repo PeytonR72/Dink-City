@@ -38,7 +38,7 @@ export class Hud {
   private revealing: Reveal | null = null;
   /** The other Player's name: the Bot offline, a Display name online. */
   private opponent = 'Bot';
-  /** Offline a shot press after the Match starts another; online there's no rematch yet (issue 13). */
+  /** Offline a shot press after the Match starts another; online the Match-over panel offers the rematch. */
   private rematch = true;
 
   constructor(
@@ -105,14 +105,14 @@ export class Hud {
         const [a, b] = this.order().map((side) => tally[side]);
         this.show({
           title: e.winner === this.local ? 'YOU WIN' : `${this.opponent.toUpperCase()} WINS`,
-          detail: `${a}–${b}. ${this.rematch ? 'Press J, K or L to play again, or Esc for the menu.' : 'Press Esc for the menu.'}`,
+          detail: `${a}–${b}.${this.rematch ? ' Press J, K or L to play again, or Esc for the menu.' : ''}`,
         });
         this.sticky = true;
       }
     }
   }
 
-  /** An online Match: this screen plays `local`, against the Player named `opponent`, with no rematch. */
+  /** An online Match: this screen plays `local`, against the Player named `opponent`, with no rematch by shot press. */
   setOnline(local: SideIndex, opponent: string) {
     this.local = local;
     this.opponent = opponent;
