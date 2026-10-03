@@ -6,6 +6,7 @@ import {
   encode,
   isHello,
   isIn,
+  isLeave,
   isPing,
   isPresetId,
   isReady,
@@ -18,7 +19,7 @@ import {
   type PingMsg,
   type PresetId,
 } from '../../src/net';
-import { TICK, type SideIndex } from '../../src/sim';
+import { TICK, other, type SideIndex } from '../../src/sim';
 import { simTuning } from '../../src/tuning';
 import type { CourtInfo, CourtReport, ReportOp } from './courtDirectory';
 import { createCourtMatch, type CourtMatch } from './courtMatch';
@@ -98,6 +99,7 @@ export class Court extends Server<Env> {
     if (msg !== null && isReady(msg)) return this.ready(conn);
     if (msg !== null && isIn(msg)) return this.input(conn, msg);
     if (msg !== null && isPing(msg)) return this.ping(conn, msg);
+    if (msg !== null && isLeave(msg)) return this.leave(conn);
     this.send(conn, { t: 'error', code: 'bad_message' });
   }
 
@@ -124,10 +126,12 @@ export class Court extends Server<Env> {
     const name = validateDisplayName(msg.name);
     if (!name.ok) return this.refuse(conn, 'bad_name');
     if (msg.protocolVersion !== PROTOCOL_VERSION || msg.simHash !== SIM_HASH) return this.refuse(conn, 'version');
-    const guestSeatFree = this.seats.seats[1] === null;
-    const { seats: next, result } = seats.join(this.seats, { name: name.name, token: msg.token }, crypto.randomUUID());
+    const before = this.seats;
+    const guestSeatFree = before.seats[1] === null;
+    const { seats: next, result } = seats.join(before, { name: name.name, token: msg.token }, crypto.randomUUID());
     if (!result.ok) return this.refuse(conn, result.code);
     this.seats = next;
+    this.tellPeers(before);
     if (result.side === 1 && guestSeatFree) this.report('join');
     const replaced = this.holders[result.side];
     this.holders[result.side] = conn.id;
@@ -162,6 +166,25 @@ export class Court extends Server<Env> {
     if (this.sideOf(conn) === null || this.match === null || this.loop === null) return;
     const phase = this.match.over ? 0 : this.loop.phase(Date.now());
     this.send(conn, { t: 'pong', id: msg.id, clientTime: msg.clientTime, courtTick: this.match.state.tick + phase });
+  }
+
+  /** A Player leaving for good: their grace starts now, not when the socket times out. */
+  private leave(conn: Connection): void {
+    if (this.sideOf(conn) === null) return;
+    this.left(conn);
+    try {
+      conn.close(1000, 'left');
+    } catch {}
+  }
+
+  /** Tells each Player about their opponent's seat, wherever it changed since `before` (once the Match has started). */
+  private tellPeers(before: seats.Seats): void {
+    if (this.seats === null) return;
+    for (const { side, status } of seats.changes(before, this.seats)) {
+      const holder = this.holders[other(side)];
+      const conn = holder === null ? undefined : this.getConnection(holder);
+      if (conn !== undefined) this.send(conn, { t: 'peer', side, status });
+    }
   }
 
   /** The Side of an open, seated connection. Messages from anything else, such as a socket that's closing, are ignored. */
@@ -232,7 +255,9 @@ export class Court extends Server<Env> {
     const side = this.holders.indexOf(conn.id);
     if (side === -1 || this.seats === null) return;
     this.holders[side] = null;
-    this.seats = seats.disconnect(this.seats, side as SideIndex, Date.now());
+    const before = this.seats;
+    this.seats = seats.disconnect(before, side as SideIndex, Date.now());
+    this.tellPeers(before);
     this.gate = starting.unready(this.gate, side as SideIndex);
     this.match?.disconnect(side as SideIndex);
     this.schedule();
@@ -252,18 +277,23 @@ export class Court extends Server<Env> {
     const before = this.seats;
     this.seats = seats.expire(before, Date.now());
     for (const side of [0, 1] as const) if (this.seats.seats[side]?.status === 'gone') this.match?.gone(side);
+    this.tellPeers(before);
     if (this.seats.closed) this.close(before);
-    else if (!before.started && before.seats[1] !== null && this.seats.seats[1] === null) this.report('leave');
+    else if (this.match !== null && !this.match.over && this.seats.seats.some((seat) => seat?.status === 'gone')) {
+      // Until the Takeover Bot (issue 14), a Match can't go on with one Player: it ends, and the Court closes.
+      this.seats = { ...this.seats, closed: true };
+      this.close(before, 'a Player left');
+    } else if (!before.started && before.seats[1] !== null && this.seats.seats[1] === null) this.report('leave');
     this.schedule();
   }
 
   /**
    * Ends the Court. Before the start that's the Host leaving (or never connecting), which a seated Guest is told, or
-   * 30 minutes with no Guest; after it, both Players being gone.
+   * 30 minutes with no Guest; after it, both Players being gone, or one before the Match is over.
    */
-  private close(before: seats.Seats): void {
+  private close(before: seats.Seats, reason = 'both Players are gone'): void {
     const guest = this.holders[1] === null ? undefined : this.getConnection(this.holders[1]);
-    this.stopTicking('both Players are gone');
+    this.stopTicking(reason);
     this.stopHeartbeat();
     this.clearStartTimer();
     this.holders = [null, null];

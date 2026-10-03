@@ -165,6 +165,18 @@ body {
   font-weight: 600;
 }
 
+/* Online: the opponent disconnected, or left. */
+#peer {
+  margin-top: 4px;
+  font-size: 13px;
+  font-weight: 700;
+  color: #ffd23f;
+}
+
+#peer[hidden] {
+  display: none;
+}
+
 #controls {
   position: absolute;
   bottom: 12px;

@@ -1,6 +1,6 @@
 // The Court's seat rules, pure, with the time passed in. The Court DO holds a `Seats` and swaps it for each result.
 import type { SideIndex } from '../../src/sim';
-import type { CourtErrorCode, CourtPlayer } from '../../src/net';
+import type { CourtErrorCode, CourtPlayer, PeerStatus } from '../../src/net';
 
 /** How long a disconnected Player keeps their seat. */
 export const GRACE_MS = 30_000;
@@ -94,6 +94,18 @@ export function nextExpiry(s: Seats): number | null {
   const ends = s.seats.flatMap((seat) => (seat?.status === 'grace' ? [seat.until] : []));
   if (s.waitingSince !== null) ends.push(s.waitingSince + IDLE_MS);
   return ends.length > 0 ? Math.min(...ends) : null;
+}
+
+/**
+ * Each Player whose status went from `before` to `after`, once the Match has started, for their opponent's `peer`.
+ * Before the start, the waiting panel has nothing to show.
+ */
+export function changes(before: Seats, after: Seats): { side: SideIndex; status: PeerStatus }[] {
+  if (!after.started) return [];
+  return ([0, 1] as const).flatMap((side) => {
+    const status = after.seats[side]?.status;
+    return status !== undefined && status !== before.seats[side]?.status ? [{ side, status }] : [];
+  });
 }
 
 /** The seated Players, by Side, as the welcome lists them. */

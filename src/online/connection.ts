@@ -29,6 +29,12 @@ function saveToken(code: string, token: string) {
   } catch {}
 }
 
+function forgetToken(code: string) {
+  try {
+    sessionStorage.removeItem(tokenKey(code));
+  } catch {}
+}
+
 /**
  * Creates a Court with this Player as its Host, and keeps the Host token for the hello. Returns its code. Throws
  * with the Worker's error code (`bad_name`…) as the message, or the browser's own error if it can't be reached.
@@ -47,8 +53,10 @@ export async function createCourt(name: string, preset: PresetId): Promise<strin
 
 export interface CourtLink {
   send(msg: ClientMsg): void;
-  /** Leaves the Court. `onClose` isn't called. */
+  /** Leaves the Court. `onClose` isn't called. The seat token stays, so the link still rejoins the same seat. */
   close(): void;
+  /** Leaves the Match for good: tells the Court, forgets the seat token, and closes. `onClose` isn't called. */
+  leave(): void;
 }
 
 /**
@@ -81,6 +89,11 @@ export function joinCourt(
     close() {
       closed = true;
       ws.close();
+    },
+    leave() {
+      this.send({ t: 'leave' });
+      forgetToken(code);
+      this.close();
     },
   };
 }

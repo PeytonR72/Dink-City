@@ -7,7 +7,10 @@ import type { SnapEvent } from './protocol';
 
 /** Snapshots are drawn this many Ticks behind the newest: 100 ms, three Snapshots' worth of slack. */
 export const INTERP_DELAY_TICKS = 6;
-/** Further than this from where it should be, the clock jumps there (a rejoin, a hidden tab). */
+/**
+ * Further than this from where it should be, the clock jumps there (a rejoin, a hidden tab, a long frame), skipping the
+ * events it passes over rather than playing them all at once.
+ */
 const JUMP_TICKS = 30;
 /** How fast the clock eases toward where it should be, per second. */
 const EASE_RATE = 3;
@@ -26,7 +29,8 @@ export interface Interpolator {
   readonly states: readonly SimState[];
   /**
    * A Snapshot's state, with the events of it this screen didn't predict. Returns what to tell now: the outcomes, after
-   * any event of the same Tick or earlier still waiting. The rest wait for the clock.
+   * any event of the same Tick or earlier still waiting. The rest wait for the clock. One that leaves the clock too far
+   * behind jumps it, so a hidden tab keeps only what it may still draw.
    */
   push(state: SimState, events: readonly SnapEvent[]): Told[];
   /** Runs the clock `dt` seconds on, and returns the events it passed, with the Snapshot each came in. */
@@ -53,6 +57,23 @@ export function createInterpolator(start: SimState): Interpolator {
     return out;
   };
 
+  /** Jumps the clock to where it should be if it's too far off, dropping the events passed over. */
+  const resync = () => {
+    const behind = states.at(-1)!.tick - INTERP_DELAY_TICKS - clock;
+    if (Math.abs(behind) <= JUMP_TICKS) return false;
+    clock += behind;
+    waiting = waiting.filter((w) => w.event.tick > clock);
+    prune();
+    return true;
+  };
+
+  /** Keeps the newest Snapshot at or before `clock - KEEP_TICKS`, and everything after it. */
+  const prune = () => {
+    let keep = 0;
+    while (keep + 1 < states.length && states[keep + 1]!.tick <= clock - KEEP_TICKS) keep++;
+    if (keep > 0) states = states.slice(keep);
+  };
+
   return {
     get clock() {
       return clock;
@@ -65,6 +86,7 @@ export function createInterpolator(start: SimState): Interpolator {
       if (!started) clock = Math.max(clock, state.tick - INTERP_DELAY_TICKS);
       started = true;
       states.push(state);
+      resync();
       const out: Told[] = [];
       for (const event of events) {
         if (!isOutcome(event)) {
@@ -84,14 +106,10 @@ export function createInterpolator(start: SimState): Interpolator {
       const newest = states.at(-1)!.tick;
       if (started) {
         clock += dt / TICK;
-        const behind = newest - INTERP_DELAY_TICKS - clock;
-        clock += Math.abs(behind) > JUMP_TICKS ? behind : behind * (1 - Math.exp(-EASE_RATE * dt));
+        if (!resync()) clock += (newest - INTERP_DELAY_TICKS - clock) * (1 - Math.exp(-EASE_RATE * dt));
         clock = Math.min(clock, newest);
       }
-      // Keep the newest Snapshot at or before `clock - KEEP_TICKS`, and everything after it.
-      let keep = 0;
-      while (keep + 1 < states.length && states[keep + 1]!.tick <= clock - KEEP_TICKS) keep++;
-      if (keep > 0) states = states.slice(keep);
+      prune();
       return due(clock);
     },
   };

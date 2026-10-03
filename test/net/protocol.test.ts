@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { MAX_IN_INTENTS, PROTOCOL_VERSION, decode, encode, isCourtMsg, isHello, isIn, isLobbyMsg, isPing, isReady, type CourtMsg, type LobbyMsg } from '../../src/net';
+import { MAX_IN_INTENTS, PROTOCOL_VERSION, decode, encode, isCourtMsg, isHello, isIn, isLeave, isLobbyMsg, isPing, isReady, type CourtMsg, type LobbyMsg } from '../../src/net';
 import { createInitialState } from '../../src/sim';
 
 const hello = { t: 'hello', name: 'Pat', protocolVersion: PROTOCOL_VERSION, simHash: '0123abcd' };
@@ -38,6 +38,12 @@ describe('the Court protocol', () => {
     expect(isReady({ t: 'ready' })).toBe(true);
     expect(isReady({ t: 'hello' })).toBe(false);
     expect(isReady(null)).toBe(false);
+  });
+
+  it('guards a leave', () => {
+    expect(isLeave({ t: 'leave' })).toBe(true);
+    expect(isLeave({ t: 'ready' })).toBe(false);
+    expect(isLeave(null)).toBe(false);
   });
 
   it('guards an in', () => {
@@ -84,6 +90,9 @@ describe('the Court protocol', () => {
       { t: 'snap', tick: 4, ack: -1, state: createInitialState(1), last: [[0, 0, 0, 0, 0], [127, -127, 64, 0, 6]], events: [{ kind: 'match', winner: 1, tick: 3 }] },
       { t: 'over', winner: 0 },
       { t: 'pong', id: 2, clientTime: 1000.25, courtTick: 412.5 },
+      { t: 'peer', side: 1, status: 'grace' },
+      { t: 'peer', side: 0, status: 'connected' },
+      { t: 'peer', side: 1, status: 'gone' },
     ];
     for (const msg of good) expect(isCourtMsg(decode(encode(msg))), msg.t).toBe(true);
 
@@ -106,6 +115,9 @@ describe('the Court protocol', () => {
       { t: 'over', winner: -1 },
       { t: 'pong', id: 2, clientTime: 1000 },
       { t: 'pong', id: 2, clientTime: 1000, courtTick: null },
+      { t: 'peer', side: 2, status: 'gone' },
+      { t: 'peer', side: 0, status: 'away' },
+      { t: 'peer', side: 0 },
     ];
     for (const msg of bad) expect(isCourtMsg(msg), JSON.stringify(msg)).toBe(false);
   });

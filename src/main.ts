@@ -190,6 +190,17 @@ const pause = new Overlay(
 pause.on('#resume', () => setMode('match'));
 pause.on('#quit', () => quitToMenu());
 
+/** Online, Esc opens this instead of pausing: the Court doesn't wait, so the Match plays on behind it. */
+const leaveMenu = new Overlay(
+  'leave-match',
+  `<h1>Leave match?</h1>
+  <p>The match plays on while this is open.</p>
+  <button id="keep-playing" class="primary">Keep playing</button>
+  <button id="leave-now">Leave</button>`,
+);
+leaveMenu.on('#keep-playing', () => setMode('match'));
+leaveMenu.on('#leave-now', () => quitToMenu());
+
 const onlineStatus = new Overlay(
   'online',
   `<h1>Online</h1>
@@ -257,11 +268,18 @@ function onMatchWon() {
 /** Online, drives the local Player instead of the keyboard: called once per Tick with the newest Snapshot's state. */
 let drive: ((s: SimState) => Intent) | null = null;
 
-/** Back to the map. Leaving an online Match reloads the page offline, which drops the Court and its driver. */
+/**
+ * Back to the map. Leaving an online Match tells the Court and forgets the seat, so it won't rejoin by accident, then
+ * reloads the page offline, which drops the Court and its driver.
+ */
 function quitToMenu() {
   if (match === offline) return setMode('menu');
+  court?.leave();
   location.assign(location.pathname);
 }
+
+/** After the opponent leaves an online Match for good, the screen says so this long, then goes back to the map. */
+const PEER_LEFT_MS = 4000;
 
 const COURT_ERRORS: Record<CourtErrorCode, string> = {
   full: 'That Court is full.',
@@ -321,10 +339,7 @@ async function goOnline(name: string, target: { preset: PresetId } | { code: str
   onlinePanel.showWaiting('Connecting…');
   // Before the start, anything that goes wrong returns to the list and says why; after it, the Match stays on screen.
   const fail = (text: string) => {
-    if (match !== offline) {
-      onlineStatus.el.querySelector('.online-status')!.textContent = text;
-      return setMode('online');
-    }
+    if (match !== offline) return showOnlineStatus(text);
     leaveCourt();
     void openLobby(text);
   };
@@ -353,6 +368,11 @@ async function goOnline(name: string, target: { preset: PresetId } | { code: str
 
   let side: SideIndex = 0;
   let online: InstanceType<typeof OnlineMatch> | null = null;
+  let opponent = 'Player';
+  /** The opponent left during the Match, which ended it: the Court closing is no news. */
+  let peerLeft = false;
+  /** The Court said the Match is over, which a Snapshot may not have shown yet. */
+  let over = false;
   const link = joinCourt(code, name, {
     onMessage(msg) {
       if (msg.t === 'welcome') {
@@ -376,17 +396,29 @@ async function goOnline(name: string, target: { preset: PresetId } | { code: str
         renderer.setColors(side, colors);
         renderer.setColors(other(side), botColors(venue));
         renderer.cut();
-        hud.setOnline(side, msg.players[other(side)]?.name ?? 'Player');
+        opponent = msg.players[other(side)]?.name ?? 'Player';
+        hud.setOnline(side, opponent);
+        // A Player who reloads may find their opponent away.
+        hud.setPeer(msg.players[other(side)]?.connected === false ? 'grace' : null);
         hud.setPractice(null);
         hud.reset();
         setMode('match');
       } else if (msg.t === 'snap') online?.receive(msg);
       else if (msg.t === 'pong') online?.pong(msg);
+      else if (msg.t === 'peer') {
+        hud.setPeer(msg.status);
+        // Until the Takeover Bot (issue 14), the Match can't go on without them, and the Court ends it.
+        if (msg.status === 'gone' && online !== null && !over && online.latest.phase !== 'over') {
+          peerLeft = true;
+          showOnlineStatus(`${opponent} left.`);
+          setTimeout(quitToMenu, PEER_LEFT_MS);
+        }
+      } else if (msg.t === 'over') over = true;
       else if (msg.t === 'error') fail(COURT_ERRORS[msg.code]);
     },
     onClose(closeCode, reason) {
       // A refusal already said why.
-      if (Object.hasOwn(COURT_ERRORS, reason)) return;
+      if (peerLeft || Object.hasOwn(COURT_ERRORS, reason)) return;
       if (reason === 'replaced') fail('This seat is being played in another tab.');
       else if (closeCode === COURT_CLOSE) fail('The Court has closed.');
       else fail(match === offline ? 'Lost the connection to the Court.' : 'Lost the connection to the Court. Reload to rejoin.');
@@ -395,10 +427,18 @@ async function goOnline(name: string, target: { preset: PresetId } | { code: str
   court = link;
 }
 
+/** The notice over an online Match that was cut off, with the way back to the map. */
+function showOnlineStatus(text: string) {
+  onlineStatus.el.querySelector('.online-status')!.textContent = text;
+  setMode('online');
+}
+
 function setMode(m: Mode) {
   mode = m;
   menu.el.hidden = m !== 'menu';
-  pause.el.hidden = m !== 'paused';
+  // Online, Esc asks to leave instead: nothing pauses.
+  pause.el.hidden = m !== 'paused' || match !== offline;
+  leaveMenu.el.hidden = m !== 'paused' || match === offline;
   onlineStatus.el.hidden = m !== 'online';
   if (m !== 'lobby' && m !== 'waiting') onlinePanel.hide();
   // The Lobby's socket is open only while its list is on show.
@@ -412,7 +452,7 @@ function setMode(m: Mode) {
     map.refresh(progress);
     map.focusFirst();
   }
-  if (m === 'paused') pause.show();
+  if (m === 'paused') (match === offline ? pause : leaveMenu).show();
   if (m === 'match') (document.activeElement as HTMLElement | null)?.blur?.();
   document.body.dataset.mode = m;
   input.clear();
@@ -532,7 +572,7 @@ function update(dt: number) {
     // The map is drawn instead of the court, which keeps its last frame behind the menu.
     map.draw(dt);
   } else if (mode === 'match' || (mode === 'paused' && match !== offline)) {
-    // The Court doesn't wait, so an online Match plays on behind the pause menu.
+    // The Court doesn't wait, so an online Match plays on behind "Leave match?".
     match.frame(dt);
   } else {
     // The court sits still behind the other menus.

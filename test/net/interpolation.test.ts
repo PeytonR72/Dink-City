@@ -32,8 +32,40 @@ describe('the Interpolated timeline', () => {
     expect(tl.clock).toBe(20);
     // A Snapshot far ahead (a hidden tab): it jumps.
     tl.push(at(100), []);
+    expect(tl.clock).toBe(100 - INTERP_DELAY_TICKS);
+  });
+
+  it('resyncs on a Snapshot that leaves it over 30 Ticks behind, skipping what it passed over rather than playing it fast', () => {
+    const tl = createInterpolator(START);
+    tl.push(at(20), [hit(18)]);
+    // A hidden tab: Snapshots arrive, but no frame runs the clock.
+    for (let t = 22; t <= 50; t += 2) tl.push(at(t), [bounce(t - 1)]);
+    expect(tl.clock).toBe(14);
+    tl.push(at(52), [hit(51)]);
+    expect(tl.clock).toBe(52 - INTERP_DELAY_TICKS);
+    // Only the Snapshots it may still draw are kept.
+    expect(tl.states[0]!.tick).toBeGreaterThanOrEqual(46 - 4 - 2);
+    const told: Told[] = [];
+    while (tl.clock < 52) told.push(...tl.advance(TICK));
+    expect(told.flatMap((t) => t.events)).toEqual([bounce(47), bounce(49), hit(51)]);
+  });
+
+  it('jumps on a frame long enough to leave it over 30 Ticks behind, skipping what it passed over', () => {
+    const tl = createInterpolator(START);
+    tl.push(at(20), []);
     tl.advance(TICK);
-    expect(tl.clock).toBeCloseTo(100 - INTERP_DELAY_TICKS, 9);
+    tl.push(at(40), [bounce(30), bounce(39)]);
+    const told = tl.advance(1);
+    expect(tl.clock).toBe(40 - INTERP_DELAY_TICKS);
+    expect(told).toEqual([]);
+    while (tl.clock < 39) told.push(...tl.advance(TICK));
+    expect(told.flatMap((t) => t.events)).toEqual([bounce(39)]);
+  });
+
+  it('keeps an outcome told across a resync', () => {
+    const tl = createInterpolator(START);
+    tl.push(at(20), [hit(18)]);
+    expect(tl.push(at(80), [dead(79)]).flatMap((t) => t.events)).toEqual([dead(79)]);
   });
 
   it("ignores a Snapshot that isn't newer", () => {

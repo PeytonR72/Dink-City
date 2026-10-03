@@ -4,7 +4,7 @@ import type { MatchView } from '../src/match/driver';
 import { OnlineMatch, SNAP_DISTANCE } from '../src/match/online';
 import { localView } from '../src/render/localView';
 import { TICK, createInitialState, step, type Intent, type SideIndex, type SimState } from '../src/sim';
-import { simTuning } from '../src/tuning';
+import { simTuning, viewTuning } from '../src/tuning';
 
 const START = createInitialState(1);
 const STILL: Intent = { move: { x: 0, y: 0 }, aim: { x: 0, y: 0 }, shot: null };
@@ -22,6 +22,10 @@ function court(ticks: number, ...then: Intent[]): SimState {
 /** The Court's states, Tick by Tick, with Side 1 walking right and Side 0 standing still. */
 const WALK = [START];
 for (let t = 0; t < 40; t++) WALK.push(step(WALK.at(-1)!, [STILL, RIGHT], simTuning));
+
+/** The Court's states, Tick by Tick, with both Players standing still. */
+const STANDING = [START];
+for (let t = 0; t < 240; t++) STANDING.push(step(STANDING.at(-1)!, [STILL, STILL], simTuning));
 
 const x = (s: SimState, side: SideIndex = 0) => s.sides[side].players[0].pos.x;
 
@@ -64,8 +68,13 @@ function online(local: SideIndex = 0, input: () => Intent = () => STILL, start =
     frame(TICK);
     pong(0.5);
   };
+  /** A frame after `ms` with none, told only `dt` seconds passed, as `main.ts` caps a long frame. */
+  const stall = (ms: number, dt: number) => {
+    clock += ms;
+    match.frame(dt);
+  };
   const ins = () => sent.filter((m): m is InMsg => m.t === 'in');
-  return { match, sent, ins, told, drawn, snap, frame, frames, pong, synced, last: () => drawn[drawn.length - 1]! };
+  return { match, sent, ins, told, drawn, snap, frame, frames, stall, pong, synced, last: () => drawn[drawn.length - 1]! };
 }
 
 const net = (tick: number): SnapEvent => ({ kind: 'net', pos: { x: 0, y: 0, z: 0 }, cord: false, tick });
@@ -284,5 +293,70 @@ describe('OnlineMatch', () => {
       frames(1);
     }
     expect(told).toEqual([{ state: s, events: ['11 hit'] }]);
+  });
+});
+
+describe("OnlineMatch keeps the Court's time", () => {
+  it('shows a Fault with no Replay and a hard hit with no hit-stop, and ignores Game speed', () => {
+    const speed = viewTuning.gameSpeed;
+    viewTuning.gameSpeed = 0.5;
+    try {
+      // The fake view throws if a Replay is asked for.
+      const { synced, frames, snap, told, last } = online();
+      synced();
+      frames(8);
+      const smash = { ...remoteHit(5), variant: 'smash', speed: 30 } as SnapEvent;
+      snap(STANDING[6]!, [smash, dead(6)]);
+      // The hit waiting before the Fault is told first.
+      expect(told.flatMap((t) => t.events)).toEqual(['5 hit', '6 dead']);
+      const from = last().clock!;
+      for (let t = 8; t < 38; t += 2) {
+        frames(2);
+        snap(STANDING[t]!);
+      }
+      // A Tick drawn per Tick of real time: no pause and no slow motion. The remote clock eases, so only about.
+      expect(last().clock!.sides[0] - from.sides[0]).toBeCloseTo(30, 9);
+      expect(last().clock!.sides[1] - from.sides[1]).toBeCloseTo(30, -1);
+    } finally {
+      viewTuning.gameSpeed = speed;
+    }
+  });
+
+  it('resyncs after a hidden tab: the Interpolated clock jumps to the newest Snapshot, and nothing it skipped is told', () => {
+    const { match, synced, frames, snap, stall, told } = online();
+    synced();
+    for (let t = 2; t <= 30; t += 2) {
+      snap(STANDING[t]!);
+      frames(2);
+    }
+    // Hidden for 3 s: no frames, but the Snapshots still arrive.
+    for (let t = 32; t <= 210; t += 2) snap(STANDING[t]!, t === 100 ? [remoteHit(99)] : []);
+    expect(match.remoteTick).toBeGreaterThan(210 - INTERP_DELAY_TICKS - 31);
+    // The first frame back is capped at 0.25 s, as `main.ts` caps it, but the clock it reads isn't.
+    stall(3000, 0.25);
+    expect(match.remoteTick).toBeGreaterThan(210 - INTERP_DELAY_TICKS - 2);
+    frames(2);
+    expect(told).toEqual([]);
+  });
+
+  it('resyncs after a stall with no Snapshots (a debugger pause): it waits for the next one, then predicts on from it', () => {
+    const { match, synced, frames, snap, stall, ins } = online();
+    synced();
+    for (let t = 2; t <= 30; t += 2) {
+      snap(STANDING[t]!, [], t);
+      frames(2);
+    }
+    const stamped = match.predicted.curr.tick;
+    stall(3000, 0.25);
+    // About 180 Ticks were missed. The input skips them, and the prediction doesn't step them.
+    const sent = ins().at(-1)!;
+    expect(sent.from).toBeGreaterThan(stamped + 150);
+    expect(sent.intents.length).toBeLessThanOrEqual(8);
+    expect(match.predicted.curr.tick).toBe(stamped);
+    // The Court's newest Snapshot: the prediction starts from it, and steps only the Ticks stamped since.
+    snap(STANDING[210]!, [], 30);
+    expect(match.predicted.curr.tick).toBe(sent.from + sent.intents.length);
+    frames(1);
+    expect(match.remoteTick).toBeGreaterThan(210 - INTERP_DELAY_TICKS - 2);
   });
 });

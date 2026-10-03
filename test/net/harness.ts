@@ -104,7 +104,10 @@ export interface FakeClient {
   readonly drawn: DrawnFrame[];
   /** Every event the client told its view, from its prediction or the Court, in order, with the frame's time (ms). */
   readonly heard: (SnapEvent & { at: number })[];
-  /** A stopped client runs no frames: no pings, no input. It still receives. */
+  /**
+   * A stopped client runs no frames: no pings, no input, and its clocks don't run. It still receives: a hidden tab. Its
+   * first frame back runs its timelines on by the whole time stopped, as `OnlineMatch` does.
+   */
   stopped: boolean;
 }
 
@@ -215,8 +218,11 @@ export function createHarness(opts: HarnessOptions): Harness {
     });
 
   const start = createInitialState(matchSeed, onlineConfig(preset));
-  /** Each client's track for the ball (every Tick known) and its ball clock, as `OnlineMatch` keeps them. */
-  const tracks = new Map<SideIndex, { track: SimState[]; ball: BallClock | null }>();
+  /**
+   * Each client's track for the ball (every Tick known), its ball clock, and the time of its last frame (ms), as
+   * `OnlineMatch` keeps them.
+   */
+  const tracks = new Map<SideIndex, { track: SimState[]; ball: BallClock | null; lastFrame: number | null }>();
   const retrack = (c: FakeClient) => {
     const t = tracks.get(c.side)!;
     t.track = extendTrack(t.track, c.predictor.states, c.interp.clock - 30);
@@ -239,7 +245,7 @@ export function createHarness(opts: HarnessOptions): Harness {
     stopped: false,
   });
   const clients: [FakeClient, FakeClient] = [client(0, 123_456.7), client(1, -4_321.2)];
-  for (const c of clients) tracks.set(c.side, { track: [start], ball: null });
+  for (const c of clients) tracks.set(c.side, { track: [start], ball: null, lastFrame: null });
   const drives = clients.map((c): Drive => {
     const bot = createBot(c.side, matchSeed + 1 + c.side, DIFFICULTY.easy, simTuning);
     return opts.drive?.[c.side] ?? ((tick, latest) => bot.think({ ...observe(latest, c.side), tick }));
@@ -270,11 +276,12 @@ export function createHarness(opts: HarnessOptions): Harness {
     retrack(c);
 
     // Draws the frame, as `OnlineMatch.frame` does.
-    hear(c, c.interp.advance(TICK));
+    const t = tracks.get(c.side)!;
+    hear(c, c.interp.advance(t.lastFrame === null ? TICK : (now - t.lastFrame) / 1000));
+    t.lastFrame = now;
     const { prev, curr } = c.predictor;
     const courtNow = c.sync.courtTick(c.clock());
     const alpha = courtNow === null || prev === curr ? 1 : Math.min(1, Math.max(0, courtNow + c.sync.lead - prev.tick + 1));
-    const t = tracks.get(c.side)!;
     const view = composeView(
       { local: c.side, now: prev.tick + alpha * (curr.tick - prev.tick), remote: c.interp.clock, track: t.track, snaps: c.interp.states },
       t.ball,

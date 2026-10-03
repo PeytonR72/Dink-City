@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { DECAY_TICKS, SAME_EVENT_TICKS, isOutcome } from '../../src/net';
+import { DECAY_TICKS, INTERP_DELAY_TICKS, SAME_EVENT_TICKS, isOutcome } from '../../src/net';
 import { SNAP_DISTANCE } from '../../src/match/online';
 import type { SnapEvent } from '../../src/net';
 import type { Intent, SideIndex } from '../../src/sim';
@@ -271,6 +271,46 @@ describe('the netcode harness', () => {
     const before = pos();
     h.run(1_000);
     expect(pos()).toEqual(before);
+  });
+});
+
+describe('a stalled client', () => {
+  it('stands still on the Court while hidden for 3 s, then resyncs to the Court on its return rather than catching up', () => {
+    const h = createHarness({ seed: 4, up: LOSSY, down: LOSSY, drive: [walk(45)] });
+    const c = h.clients[0];
+    h.run(5_030);
+    c.stopped = true;
+    const last = c.stream.last!;
+    const heard = c.heard.length;
+    h.run(3_000);
+    // The Court ran the missing-input fade: the Player stood still for most of the stall.
+    const stood = [...h.applied[0]].filter(([tick]) => tick > last + DECAY_TICKS);
+    expect(stood.length).toBeGreaterThan(150);
+    expect(stood.every(([, i]) => i.move.x === 0 && i.move.y === 0 && i.shot === null)).toBe(true);
+    // Nothing but outcomes was heard meanwhile, and only the Snapshots it may still draw were kept.
+    expect(c.heard.slice(heard).every(isOutcome)).toBe(true);
+    expect(c.interp.states.length).toBeLessThan(25);
+
+    c.stopped = false;
+    const back = c.drawn.length;
+    const resumed = h.match.state.tick;
+    const resumedAt = h.now;
+    h.run(3_000);
+    // The first frame back draws the remote Player about 100 ms plus a one-way trip behind the Court, not 3 s.
+    const first = c.drawn[back]!;
+    expect(resumed - first.clock.sides[1]).toBeGreaterThan(INTERP_DELAY_TICKS);
+    expect(resumed - first.clock.sides[1]).toBeLessThan(INTERP_DELAY_TICKS + 12);
+    // The local Player and the ball pick up from the Court's newest Snapshot, ahead of the Court by the input lead.
+    expect(first.clock.sides[0]).toBeGreaterThan(resumed);
+    expect(first.clock.sides[0]).toBeLessThan(resumed + 15);
+    // Nothing skipped over is heard: every moment event heard after the return is from after it.
+    const after = c.heard.filter((e) => e.at > resumedAt && !isOutcome(e));
+    expect(after.every((e) => e.tick > resumed - INTERP_DELAY_TICKS - 12)).toBe(true);
+    expect(repeats(c.heard)).toEqual([]);
+    // A second on, the prediction is exact again.
+    const errors = predictionErrors(h, c, 0).filter(([tick]) => tick > resumed + 60);
+    expect(errors.length).toBeGreaterThan(30);
+    expect(Math.max(...errors.map(([, e]) => e))).toBeLessThan(NOISE);
   });
 });
 

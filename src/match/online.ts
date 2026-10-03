@@ -67,6 +67,8 @@ export class OnlineMatch implements MatchDriver {
    */
   private offset = { x: 0, z: 0 };
   private now: () => number;
+  /** This screen's clock at the last frame, or null before the first. */
+  private lastFrame: number | null = null;
 
   constructor(private opts: OnlineMatchOptions) {
     this.local = opts.local;
@@ -125,18 +127,25 @@ export class OnlineMatch implements MatchDriver {
     this.sync.pong(msg, this.now());
   }
 
+  /**
+   * `dt` is capped for a long frame (`MAX_FRAME`), but the Court's clock isn't, so the timelines run on this screen's
+   * clock instead: a stall, a hidden tab or a debugger pause drops no time. Each resyncs rather than catching up.
+   */
   frame(dt: number) {
+    const time = this.now();
+    const elapsed = this.lastFrame === null ? dt : Math.max(0, time - this.lastFrame) / 1000;
+    this.lastFrame = time;
     this.sendInput();
-    const fade = Math.exp(-SMOOTH_RATE * dt);
+    const fade = Math.exp(-SMOOTH_RATE * elapsed);
     const { x, z } = this.offset;
     this.offset = Math.hypot(x, z) < SETTLED ? { x: 0, z: 0 } : { x: x * fade, z: z * fade };
     // The remote Player's hits and bounces, as their time comes.
-    this.tell(this.interp.advance(dt));
+    this.tell(this.interp.advance(elapsed));
 
     const { prev, curr } = this.predictor;
     // The prediction steps a Tick as each is stamped, so local now runs on the input clock: from `prev` at the last
     // Tick stamped to `curr` a Tick on. Before the clock is known it stands still.
-    const at = this.sync.courtTick(this.now());
+    const at = this.sync.courtTick(time);
     const alpha = at === null || prev === curr ? 1 : Math.min(1, Math.max(0, at + this.sync.lead - prev.tick + 1));
     const now = prev.tick + alpha * (curr.tick - prev.tick);
     const view = composeView({ local: this.local, now, remote: this.interp.clock, track: this.track, snaps: this.interp.states }, this.last?.ball ?? null);

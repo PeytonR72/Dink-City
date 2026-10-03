@@ -1,4 +1,5 @@
 // Plain DOM HUD: score, server, the Fault banner, and call-outs.
+import type { PeerStatus } from '../net';
 import type { SideIndex, SimEvent, SimState } from '../sim';
 import { calloutFor } from './callout';
 import { faultText, type FaultText } from './faultText';
@@ -29,6 +30,7 @@ export class Hud {
   private shoutEl: HTMLElement;
   private replayTag: HTMLElement;
   private practice: HTMLElement;
+  private peer: HTMLElement;
   /** A Replay is playing: the Fault banner stays up. */
   private replaying = false;
   private bannerTimer = 0;
@@ -49,6 +51,7 @@ export class Hud {
         <div class="row"><span class="serve">●</span><span class="name"></span><span class="points"></span></div>
         <div class="row"><span class="serve">●</span><span class="name"></span><span class="points"></span></div>
         <div id="games"></div>
+        <div id="peer" hidden></div>
       </div>
       <div id="banner"><div id="callout"></div><div id="detail"></div><div id="replay-tag">REPLAY · J / K / L to skip</div></div>
       <div id="shout"></div>
@@ -61,6 +64,7 @@ export class Hud {
     this.shoutEl = root.querySelector('#shout')!;
     this.replayTag = root.querySelector('#replay-tag')!;
     this.practice = root.querySelector('#practice')!;
+    this.peer = root.querySelector('#peer')!;
   }
 
   /** Local Player's row first. */
@@ -113,6 +117,13 @@ export class Hud {
     this.local = local;
     this.opponent = opponent;
     this.rematch = false;
+  }
+
+  /** Online: the opponent's link to the Court, under the score. Nothing shows while they're connected (or null). */
+  setPeer(status: PeerStatus | null) {
+    const text = status === 'grace' ? `${this.opponent} disconnected…` : status === 'gone' ? `${this.opponent} left.` : '';
+    this.peer.textContent = text;
+    this.peer.hidden = text === '';
   }
 
   /** Holds the Fault banner up, tagged REPLAY, while a Replay plays. */
