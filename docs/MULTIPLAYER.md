@@ -439,7 +439,7 @@ Checked by the agent in Playwright on `wrangler dev` (issue 14's comment).
 Issues: 15 (two-browser e2e), 16 (deploy; needs the user).
 
 
-- Playwright two-context e2e against `wrangler dev`: create, see the row in the list, join by click, a scripted Rally via `window.dink`, and a scored point.
+- Playwright two-context e2e against `wrangler dev`: create, see the row in the list, join by click, a scripted Rally via `window.dink`, and a scored point. Done (issue 15): `e2e/online.e2e.ts`, run by `npm run e2e`.
 - Deploy the Worker. Decide and attach a custom domain (deferred from Decision 2), then tighten the Origin allowlist.
 - Point the Vercel client at the server with a `VITE_PARTY_HOST` env var. Smoke test the live URLs.
 - ~~Add `.scratch/` issues per phase~~: done (02–16), listed under each phase.
