@@ -22,6 +22,14 @@ interface Reveal {
   end: number;
 }
 
+/** The notice under the score for each opponent status. */
+const PEER_TEXT: Record<PeerStatus, (name: string) => string> = {
+  connected: () => '',
+  grace: (name) => `${name} disconnected…`,
+  gone: (name) => `${name} left.`,
+  bot: (name) => `${name} disconnected — a Bot has taken over.`,
+};
+
 export class Hud {
   private rows: HTMLElement[];
   private games: HTMLElement;
@@ -119,9 +127,12 @@ export class Hud {
     this.rematch = false;
   }
 
-  /** Online: the opponent's link to the Court, under the score. Nothing shows while they're connected (or null). */
-  setPeer(status: PeerStatus | null) {
-    const text = status === 'grace' ? `${this.opponent} disconnected…` : status === 'gone' ? `${this.opponent} left.` : '';
+  /**
+   * Online: the opponent's link to the Court, under the score, naming them as the Player they were (`name`, by default
+   * the opponent shown). Nothing shows while they're connected (or null).
+   */
+  setPeer(status: PeerStatus | null, name = this.opponent) {
+    const text = status === null ? '' : PEER_TEXT[status](name);
     this.peer.textContent = text;
     this.peer.hidden = text === '';
   }

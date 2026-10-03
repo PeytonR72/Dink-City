@@ -56,3 +56,54 @@ When a disconnected Player's grace period runs out, a Bot plays their Side for t
 The e2e suite and deployment (15–16).
 
 ## Comments
+
+### 2026-10-03: implemented
+
+One commit, "Online play: the Takeover Bot" (the one that adds this comment).
+
+**What was built:**
+- **`courtMatch` (pure):**
+  - `gone(side)` creates the Takeover Bot: `createBot(side, seed ^ 0x7a6e ^ side, DIFFICULTY.medium, tuning, NEUTRAL)`, which plays from that Tick on. A repeated `gone` keeps the first one.
+  - Each Tick it plays, the Bot thinks once on the state being stepped, and its `move`/`aim`/`shot` are logged by Tick. Its `contact` comes from `autoContact` on that state, skipped when there's no Commit and no press. The Side stays `reported`.
+  - A rewind replays the log and works out `contact` again from the corrected state. The log is pruned with the ring buffer.
+  - Once both Players are gone, nothing steps: never Bot against Bot.
+  - An optional `bot` factory is a test seam.
+- **`src/bot/bot.ts`:** a Bot that first sees a Serve after it was due serves at once (`serveAt = max(serveAt, tick)`). Bots that see the Serve from its start are unchanged, and the golden result didn't move.
+- **Seats and Court:**
+  - `courtSeats.changes` reports a seat gone mid-Match as `bot`.
+  - `courtSeats.over` closes the Court when a seat is gone, so there's no rematch after a takeover.
+  - The Court no longer ends the Match when a seat goes `gone`. It logs the takeover, and closes once the Bot-played Match is over.
+  - A Player who reloads after a takeover gets `peer bot` after `start`.
+- **Protocol 8:** `peer { side, status: 'bot' }`.
+- **Client:**
+  - The Hud shows "<name> disconnected — a Bot has taken over." and names the opponent "<name> (Bot)" in the scoreboard and banners.
+  - The Match-over panel shows "No rematch: <name> left, and a Bot finished the Match." with Rematch disabled, and Back to map.
+  - The Court's close that follows is silent.
+  - The old "left mid-Match, back to the map in 4 s" path is gone, since a mid-Match `gone` no longer comes.
+
+**Tests:** 39 files, 454 tests (before: 446). Typecheck (root and `party/`), build and e2e 19/19 all pass.
+- **courtMatch +6 Takeover Bot tests:**
+  - A takeover mid-Rally finishes the Match, with `think` called exactly once per Tick and only for its Side.
+  - A takeover mid-Serve, 100 Ticks after the Serve began, serves within 60 Ticks.
+  - A takeover in the dead pause finishes the Match.
+  - Bursts of Side 1 Intents 15 Ticks late rewind across Bot Ticks 40 times: no Tick thought twice, and re-steps use the logged move/aim/shot.
+  - After a Side 1 hit reported 15 Ticks late changes the ball's path, the Bot still makes Contact.
+  - Both gone: nothing steps.
+- The two old "gone stands still" tests now check the Bot.
+- netcode harness +1: a takeover mid-Rally over a 60–90 ms link; the Match finishes, and the remaining client hears each Bot hit once.
+- courtSeats: +1 (`over` closes after a takeover), and `changes` reports `bot`. protocol: the `bot` guard.
+
+**Playwright, two contexts on `wrangler dev` + Vite (Court EM28D):** each screen's `dink.drive` served when serving and never swung.
+- **Long (best of 3):** Hosty won 2–1 (11–0, 0–11, 11–0) in 7,029 Ticks.
+  - Faults: both screens showed "POINT — They/You let the ball bounce twice", including the Game-end lines.
+  - Rematch: "Waiting for Guesty…" / "Hosty wants a rematch". After the second press, both screens were at Tick 0, 0–0, on a new seed (2441583800, then 157539206).
+- **Takeover in the rematch:**
+  - At 3–0, the Guest's tab was closed. 3 s later, the Host showed "Guesty disconnected…".
+  - At 30.2 s it showed "Guesty disconnected — a Bot has taken over.", with the scoreboard reading "GUESTY (BOT)". This was at a Serve after Game 1.
+  - The Bot served, returned the Host's Serves and won 2–1 at Tick 7,893. The banner read "GUESTY (BOT) WINS".
+  - The panel read "No rematch: Guesty left, and a Bot finished the Match." with Rematch disabled. No error notice appeared.
+  - Court log: "the Takeover Bot plays Side 1", then "tick interval stopped at Tick 7893". A fresh `hello` got `not_found`.
+
+**Notes:**
+- The close log line after a Bot-finished Match was added after this run.
+- The taken-over Player can't reclaim the seat (`full`), as v1 says.

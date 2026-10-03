@@ -15,13 +15,14 @@ const SEED = 4242;
 const ZERO: Intent = { move: { x: 0, y: 0 }, aim: { x: 0, y: 0 }, shot: null };
 
 /** A Court Match that logs every step, re-steps included, and the Intents each Tick was last stepped with. */
-function court(preset: PresetId = 'quick') {
+function court(preset: PresetId = 'quick', bot?: (side: SideIndex, seed: number) => Bot) {
   const stepped: [number, Intent, Intent][] = [];
   const byTick = new Map<number, readonly [Intent, Intent]>();
   const m = createCourtMatch({
     seed: SEED,
     preset,
     tuning: simTuning,
+    bot,
     onStep: (tick, [a, b]) => {
       stepped.push([tick, a, b]);
       byTick.set(tick, [a, b]);
@@ -326,17 +327,21 @@ describe('the Court Match', () => {
     expect(m.current(0)[0]).toMatchObject({ ack: 3 });
   });
 
-  it('stands a gone Side still and ignores its input from then on', () => {
-    const m = court();
+  /** A Takeover Bot that only ever walks left. */
+  const walker = (): Bot => ({ plan: { spot: null, contact: null, shot: null, leave: false }, think: () => LEFT });
+  const LEFT: Intent = { move: { x: -1, y: 0 }, aim: { x: 0, y: 0 }, shot: null };
+
+  it("gives a gone Side to the Takeover Bot and ignores its Player's input from then on", () => {
+    const m = court('quick', walker);
     m.receive(0, input(0, RIGHT, RIGHT));
     m.gone(0);
     m.receive(0, input(2, RIGHT));
     m.advance(4);
-    expect(m.state).toEqual(reference(Array.from({ length: 4 }, () => [ZERO, ZERO])));
+    expect(m.state).toEqual(reference(Array.from({ length: 4 }, () => [{ ...LEFT, contact: false }, ZERO])));
   });
 
-  it('keeps a gone Side still from when it first went, however often the Court says so, across a rewind', () => {
-    const m = court();
+  it('gives a gone Side to the Takeover Bot from when it first went, however often the Court says so, across a rewind', () => {
+    const m = court('quick', walker);
     m.receive(0, input(0, ...Array.from({ length: 10 }, () => RIGHT)));
     m.advance(10);
     m.gone(0);
@@ -344,7 +349,7 @@ describe('the Court Match', () => {
     m.gone(0);
     m.receive(1, input(5, RIGHT));
     m.advance(1);
-    expect([...m.byTick].filter(([t]) => t >= 10).every(([, [a]]) => a.move.x === 0)).toBe(true);
+    expect([...m.byTick].map(([t, [a]]) => [t, a.move.x])).toEqual(Array.from({ length: 16 }, (_, t) => [t, t < 10 ? 1 : -1]));
   });
 
   it('collects every event since the previous Snapshot, each with its Tick', () => {
@@ -520,5 +525,192 @@ describe('Reported Contact on the Court', () => {
     expect(to - HIT).toBeGreaterThan(20);
     expect(r.events.filter((e) => isHit(e, 0)).map((e) => e.tick)).toEqual([HIT]);
     expect(r.m.state.ball).toEqual(ON_TIME.states[to]!.ball);
+  });
+});
+
+/**
+ * The Takeover Bot: once a Player's grace runs out, a Bot plays their Side for the rest of the Match. Side 1 is a
+ * medium Bot's client throughout, sending its Intents as a client does (on time unless a test says otherwise); Side 0
+ * is a Player whose client is a hard Bot, until it goes.
+ */
+describe('the Takeover Bot', () => {
+  /** A Court Match whose Takeover Bots are real ones, with every `think` logged by Side and Tick. */
+  function watched() {
+    const thought: [SideIndex, number][] = [];
+    const byTick = new Map<number, readonly [Intent, Intent]>();
+    const stepped: number[] = [];
+    const m = createCourtMatch({
+      seed: SEED,
+      preset: 'quick',
+      tuning: simTuning,
+      onStep: (tick, intents) => {
+        stepped.push(tick);
+        byTick.set(tick, intents);
+      },
+      bot: (side, seed) => {
+        const bot = createBot(side, seed, DIFFICULTY.medium, simTuning);
+        return { plan: bot.plan, think: (o) => (thought.push([side, o.tick]), bot.think(o)) };
+      },
+    });
+    return Object.assign(m, { thought, byTick, stepped });
+  }
+  type Watched = ReturnType<typeof watched>;
+
+  /** Both Players' clients, as Bots. Each one's Intents as sent, by Tick. */
+  function clients() {
+    const bots = [createBot(0, 1, DIFFICULTY.hard, simTuning), createBot(1, 2, DIFFICULTY.medium, simTuning)] as const;
+    const sent: [Map<number, QIntent>, Map<number, QIntent>] = [new Map(), new Map()];
+    return {
+      sent,
+      /** Each client's Intent for the step from `s`. */
+      think(s: SimState) {
+        const q = botIntents(s, bots);
+        sent[0].set(s.tick, q[0]);
+        sent[1].set(s.tick, q[1]);
+      },
+    };
+  }
+
+  /** Runs `m` until `until` holds (or the Match ends), the clients on `sides` thinking each Tick and sending on time. */
+  function play(m: Watched, c: ReturnType<typeof clients>, until: (m: Watched) => boolean = () => false, sides: readonly SideIndex[] = [0, 1]) {
+    const events: SnapEvent[] = [];
+    while (!m.over && !until(m) && m.state.tick < 60 * 60 * 20) {
+      c.think(m.state);
+      for (const side of sides) m.receive(side, { t: 'in', from: m.state.tick, intents: [c.sent[side].get(m.state.tick)!] });
+      events.push(...snaps(m.advance(1), 1).flatMap((s) => s.events));
+    }
+    return events;
+  }
+
+  const isRallyHit = (e: SnapEvent, side: SideIndex) => e.kind === 'hit' && e.side === side && e.variant !== 'serve';
+
+  /**
+   * Side 0 disconnects when `when` first holds, and is gone `grace` Ticks later; Side 1 plays the Match out against its
+   * Takeover Bot.
+   */
+  function takeover(when: (m: Watched) => boolean, grace = 0) {
+    const m = watched();
+    const c = clients();
+    play(m, c, when);
+    m.disconnect(0);
+    const end = m.state.tick + grace;
+    play(m, c, (m) => m.state.tick === end, [1]);
+    const at = m.state;
+    m.gone(0);
+    const after = play(m, c, undefined, [1]);
+    return { m, at, after };
+  }
+
+  it('takes over mid-Rally, plays the ball and finishes the Match', () => {
+    const r = takeover((m) => m.state.phase === 'rally' && m.state.shots >= 3);
+    expect(r.at.phase).toBe('rally');
+    expect(r.m.over).toBe(true);
+    expect(r.after.filter((e) => isRallyHit(e, 0)).length).toBeGreaterThan(20);
+    // It thinks once per Tick from the takeover on, and only for its own Side.
+    expect(r.m.thought.map(([, tick]) => tick)).toEqual(Array.from({ length: r.m.state.tick - r.at.tick }, (_, i) => r.at.tick + i));
+    expect(r.m.thought.every(([side]) => side === 0)).toBe(true);
+    expect(r.m.state.match.config.contactMode).toEqual(['reported', 'reported']);
+  });
+
+  it('takes over while its Side is serving, after the Serve was due, and serves', () => {
+    const r = takeover((m) => m.state.phase === 'serve' && m.state.server === 0 && m.state.match.points[0] + m.state.match.points[1] > 0, 100);
+    expect(r.at.phase).toBe('serve');
+    expect(r.at.tick - r.at.phaseTick).toBeGreaterThanOrEqual(100);
+    const serve = r.after.find((e) => e.kind === 'hit' && e.side === 0 && e.variant === 'serve')!;
+    expect(serve.tick - r.at.tick).toBeLessThan(60);
+    expect(r.m.over).toBe(true);
+  });
+
+  it('takes over during the dead pause, and finishes the Match', () => {
+    const r = takeover((m) => m.state.phase === 'dead' && m.state.match.points[0] + m.state.match.points[1] > 1);
+    expect(r.at.phase).toBe('dead');
+    expect(r.m.over).toBe(true);
+    expect(r.after.some((e) => isRallyHit(e, 0))).toBe(true);
+  });
+
+  it('replays its logged Intents across a rewind, never thinking twice for a Tick', () => {
+    const m = watched();
+    const c = clients();
+    play(m, c, (m) => m.state.phase === 'rally');
+    m.disconnect(0);
+    m.gone(0);
+    const from0 = m.state.tick;
+    const first = new Map<number, Intent>();
+    // Side 1 sends in bursts of REWIND_TICKS, each one rewinding the Court across the Bot's Ticks.
+    for (let n = 0; n < 40 && !m.over; n++) {
+      const from = m.state.tick;
+      for (let i = 0; i < REWIND_TICKS; i++) {
+        c.think(m.state);
+        m.advance(1);
+        first.set(from + i, m.byTick.get(from + i)![0]);
+      }
+      m.receive(1, { t: 'in', from, intents: Array.from({ length: REWIND_TICKS }, (_, i) => c.sent[1].get(from + i)!) });
+    }
+    m.advance(1);
+    const ticks = m.thought.map(([, tick]) => tick);
+    expect(new Set(ticks).size).toBe(ticks.length);
+    expect(ticks.length).toBe(m.state.tick - from0);
+    expect(m.stepped.length).toBeGreaterThan(m.state.tick + 30 * REWIND_TICKS);
+    // The rewinds re-stepped each Tick with what the Bot first chose to do; only its `contact` may differ.
+    const moves = (i: Intent) => ({ move: i.move, aim: i.aim, shot: i.shot });
+    for (const [tick, intent] of first) expect(moves(m.byTick.get(tick)![0])).toEqual(moves(intent));
+  });
+
+  it('still meets the ball when a late hit from the other Player changes its path', () => {
+    // On time: the takeover's Tick, and the first Rally hit from Side 1 after it that the Bot returns.
+    const onTime = (() => {
+      const m = watched();
+      const c = clients();
+      play(m, c, (m) => m.state.tick === 120);
+      m.disconnect(0);
+      m.gone(0);
+      const from = m.state.tick;
+      const hits = play(m, c, (m) => m.state.tick === from + 60 * 60, [1]).filter((e) => e.kind === 'hit' && e.variant !== 'serve');
+      const returned = hits.findIndex((e, i) => isRallyHit(e, 1) && hits[i + 1] !== undefined && isRallyHit(hits[i + 1]!, 0));
+      return { from, hit: hits[returned]!.tick, sent: c.sent[1] };
+    })();
+    expect(onTime.hit).toBeGreaterThan(onTime.from);
+
+    // Again, with Side 1's Intents around that hit coming REWIND_TICKS late, so the Court's ball first flies on.
+    const m = watched();
+    const c = clients();
+    play(m, c, (m) => m.state.tick === onTime.from);
+    m.disconnect(0);
+    m.gone(0);
+    const lateFrom = onTime.hit - 3;
+    const events: SnapEvent[] = [];
+    let beforeReport: SimState | null = null;
+    while (m.state.tick < onTime.hit + 240 && !m.over) {
+      const tick = m.state.tick;
+      if (tick < lateFrom) m.receive(1, { t: 'in', from: tick, intents: [onTime.sent.get(tick)!] });
+      else if (tick === lateFrom + REWIND_TICKS) {
+        beforeReport = m.state;
+        m.receive(1, { t: 'in', from: lateFrom, intents: Array.from({ length: REWIND_TICKS + 1 }, (_, i) => onTime.sent.get(lateFrom + i)!) });
+      } else if (tick > lateFrom + REWIND_TICKS) {
+        c.think(m.state);
+        m.receive(1, { t: 'in', from: tick, intents: [c.sent[1].get(tick)!] });
+      }
+      events.push(...snaps(m.advance(1), 1).flatMap((s) => s.events));
+    }
+    // Until the report, the Court's ball flew on from the Bot's own shot; after it, Side 1 hit it on time.
+    expect(beforeReport!.ball.lastHitBy).toBe(0);
+    expect(events.filter((e) => isRallyHit(e, 1) && e.tick > onTime.hit - 3)[0]).toMatchObject({ tick: onTime.hit });
+    // And the Bot, whose moves for those Ticks were logged before it knew, still makes Contact with the new ball.
+    expect(events.some((e) => isRallyHit(e, 0) && e.tick > onTime.hit)).toBe(true);
+    const ticks = m.thought.map(([, tick]) => tick);
+    expect(new Set(ticks).size).toBe(ticks.length);
+  });
+
+  it('never runs Bot against Bot: once both Players are gone, nothing steps', () => {
+    const m = watched();
+    const c = clients();
+    play(m, c, (m) => m.state.tick === 300);
+    m.gone(0);
+    m.advance(30);
+    m.gone(1);
+    const tick = m.state.tick;
+    expect(m.advance(60)).toEqual([]);
+    expect(m.state.tick).toBe(tick);
+    expect(m.thought.every(([side]) => side === 0)).toBe(true);
   });
 });

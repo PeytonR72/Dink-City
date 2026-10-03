@@ -229,6 +229,8 @@ export function createBot(
         if (servePhase !== o.phaseTick) {
           servePhase = o.phaseTick;
           serveAt = o.phaseTick + SERVE_WAIT_TICKS[0] + Math.floor(random() * (SERVE_WAIT_TICKS[1] - SERVE_WAIT_TICKS[0]));
+          // A Bot that first sees this Serve after it was due (the Takeover Bot) serves at once.
+          serveAt = Math.max(serveAt, o.tick);
         }
         if (o.tick !== serveAt) return idle;
         aim = noisyAim(spread() * 0.6, spread() * 0.5);

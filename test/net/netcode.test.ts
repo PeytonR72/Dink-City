@@ -354,3 +354,27 @@ describe('the composed view and the event policy', () => {
     });
   }
 });
+
+describe('the Takeover Bot', () => {
+  it("plays a gone Player's Side from mid-Rally over the network, and the Match finishes", () => {
+    // No loss: a lost Snapshot's events are never heard, which isn't what this is about.
+    const link: LinkSpec = { ...LOSSY, loss: 0 };
+    const h = createHarness({ seed: 8, up: link, down: link });
+    const rallying = () => h.match.state.phase === 'rally' && h.match.state.shots >= 2;
+    while (!rallying()) h.run(100);
+    // Side 1's tab closes, and its grace runs out mid-Rally.
+    h.clients[1].stopped = true;
+    h.match.disconnect(1);
+    h.match.gone(1);
+    const from = h.match.state.tick;
+    while (!h.match.over && h.now < 20 * 60_000) h.run(10_000);
+    expect(h.match.over).toBe(true);
+    const hits = h.courtEvents.filter((e) => e.kind === 'hit' && e.side === 1 && e.tick > from);
+    expect(hits.filter((e) => e.kind === 'hit' && e.variant !== 'serve').length).toBeGreaterThan(2);
+    expect(hits.some((e) => e.kind === 'hit' && e.variant === 'serve')).toBe(true);
+    // The Player still in the Match heard every hit of the Bot's, each once.
+    const heard = h.clients[0].heard.filter((e) => e.kind === 'hit' && e.side === 1 && e.tick > from);
+    expect(heard.map((e) => e.tick)).toEqual(hits.map((e) => e.tick));
+    expect(repeats(h.clients[0].heard)).toEqual([]);
+  });
+});

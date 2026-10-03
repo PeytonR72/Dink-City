@@ -144,11 +144,13 @@ export class Court extends Server<Env> {
     this.gate = starting.seated(this.gate, result.side, result.token, Date.now());
     this.schedule();
     this.send(conn, { t: 'welcome', side: result.side, token: result.token, preset: this.setup.preset, players: seats.players(next) });
-    // A Player reloading mid-Match rebuilds from `start` and the current Snapshot, and learns if it's already over, and
-    // who has asked for a rematch.
+    // A Player reloading mid-Match rebuilds from `start` and the current Snapshot, and learns if it's already over, if
+    // the Takeover Bot plays their opponent, and who has asked for a rematch.
     if (this.match === null) return this.maybeStart();
     this.send(conn, this.startMsg());
     for (const msg of this.match.current(result.side)) this.send(conn, msg);
+    const opponent = other(result.side);
+    if (next.seats[opponent]?.status === 'gone' && !this.match.over) this.send(conn, { t: 'peer', side: opponent, status: 'bot' });
     next.rematch?.asked.forEach((asked, side) => asked && this.send(conn, { t: 'rematch', side: side as SideIndex }));
   }
 
@@ -260,8 +262,13 @@ export class Court extends Server<Env> {
     }
     if (this.match.over && this.interval !== null) {
       this.stopTicking(`the Match is over, ${this.match.state.match.points.join('-')}`);
-      // The Court stays up for a rematch, until a Player leaves or `REMATCH_MS` runs out.
-      if (this.seats !== null) this.seats = seats.over(this.seats, Date.now());
+      // The Court stays up for a rematch, until a Player leaves or `REMATCH_MS` runs out; after a takeover, it closes.
+      const before = this.seats;
+      if (before !== null) this.seats = seats.over(before, Date.now());
+      if (before !== null && this.seats?.closed) {
+        console.log(`[court ${this.name}] closed: the Takeover Bot finished the Match`);
+        return this.close(before, 'the Takeover Bot finished the Match');
+      }
       this.schedule();
       this.reportEnd();
     }
@@ -319,21 +326,22 @@ export class Court extends Server<Env> {
     if (this.seats === null || this.seats.closed) return;
     const before = this.seats;
     this.seats = seats.expire(before, Date.now());
-    for (const side of [0, 1] as const) if (this.seats.seats[side]?.status === 'gone') this.match?.gone(side);
+    // A Player gone mid-Match is played by the Takeover Bot from now on.
+    for (const side of [0, 1] as const) {
+      if (this.seats.seats[side]?.status !== 'gone' || before.seats[side]?.status === 'gone') continue;
+      this.match?.gone(side);
+      if (this.match !== null && !this.match.over && !this.seats.closed) console.log(`[court ${this.name}] the Takeover Bot plays Side ${side}`);
+    }
     this.tellPeers(before);
     if (this.seats.closed) this.close(before, closeReason(before, Date.now()));
-    else if (this.match !== null && !this.match.over && this.seats.seats.some((seat) => seat?.status === 'gone')) {
-      // Until the Takeover Bot (issue 14), a Match can't go on with one Player: it ends, and the Court closes.
-      this.seats = { ...this.seats, closed: true };
-      this.close(before, 'a Player left');
-    } else if (!before.started && before.seats[1] !== null && this.seats.seats[1] === null) this.report('leave');
+    else if (!before.started && before.seats[1] !== null && this.seats.seats[1] === null) this.report('leave');
     this.schedule();
   }
 
   /**
    * Ends the Court. Before the start that's the Host leaving (or never connecting), which a seated Guest is told, or
-   * 30 minutes with no Guest; after it, both Players being gone, or one before the Match is over; once it's over, either
-   * being gone, or no rematch in time.
+   * 30 minutes with no Guest; after it, both Players being gone, or the end of a Match the Takeover Bot played; once
+   * it's over, either being gone, or no rematch in time.
    */
   private close(before: seats.Seats, reason = 'both Players are gone'): void {
     const guest = this.holders[1] === null ? undefined : this.getConnection(this.holders[1]);

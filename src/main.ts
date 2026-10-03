@@ -220,24 +220,29 @@ const onlineOver = new Overlay(
 onlineOver.on('#rematch', () => court?.send({ t: 'rematch' }));
 onlineOver.on('#back-to-map', () => quitToMenu());
 
-/** The rematch as the Court has told this screen: who has asked, and whether the opponent left instead. */
+/**
+ * The rematch as the Court has told this screen: who has asked, and whether the opponent left instead, or the
+ * Takeover Bot played for them, after which there's none.
+ */
 interface RematchOffer {
   local: SideIndex;
   opponent: string;
   asked: [boolean, boolean];
   left: boolean;
+  bot: boolean;
 }
 
 /** The Match-over panel's line and button for `offer`. */
-function showRematch({ local, opponent, asked, left }: RematchOffer) {
+function showRematch({ local, opponent, asked, left, bot }: RematchOffer) {
   const mine = asked[local];
   const theirs = asked[other(local)];
   let text = '';
-  if (left) text = `${opponent} left.`;
+  if (bot) text = `No rematch: ${opponent} left, and a Bot finished the Match.`;
+  else if (left) text = `${opponent} left.`;
   else if (mine && !theirs) text = `Waiting for ${opponent}…`;
   else if (theirs && !mine) text = `${opponent} wants a rematch`;
   onlineOver.el.querySelector('.rematch-status')!.textContent = text;
-  onlineOver.el.querySelector<HTMLButtonElement>('#rematch')!.disabled = left || mine;
+  onlineOver.el.querySelector<HTMLButtonElement>('#rematch')!.disabled = left || bot || mine;
 }
 
 /** The Difficulty of the Match in play, for its star. */
@@ -305,9 +310,6 @@ function quitToMenu() {
   court?.leave();
   location.assign(location.pathname);
 }
-
-/** After the opponent leaves an online Match for good, the screen says so this long, then goes back to the map. */
-const PEER_LEFT_MS = 4000;
 
 const COURT_ERRORS: Record<CourtErrorCode, string> = {
   full: 'That Court is full.',
@@ -402,7 +404,7 @@ async function goOnline(name: string, target: { preset: PresetId } | { code: str
   /** The Court said the Match is over, which a Snapshot may not have shown yet. */
   let over = false;
   const isOver = () => over || online?.latest.phase === 'over';
-  let offer: RematchOffer = { local: 0, opponent, asked: [false, false], left: false };
+  let offer: RematchOffer = { local: 0, opponent, asked: [false, false], left: false, bot: false };
   const link = joinCourt(code, name, {
     onMessage(msg) {
       if (msg.t === 'welcome') {
@@ -430,7 +432,7 @@ async function goOnline(name: string, target: { preset: PresetId } | { code: str
         renderer.setColors(other(side), botColors(venue));
         renderer.cut();
         opponent = msg.players[other(side)]?.name ?? 'Player';
-        offer = { local: side, opponent, asked: [false, false], left: false };
+        offer = { local: side, opponent, asked: [false, false], left: false, bot: false };
         showRematch(offer);
         hud.setOnline(side, opponent);
         // A Player who reloads may find their opponent away.
@@ -441,18 +443,21 @@ async function goOnline(name: string, target: { preset: PresetId } | { code: str
       } else if (msg.t === 'snap') online?.receive(msg);
       else if (msg.t === 'pong') online?.pong(msg);
       else if (msg.t === 'peer') {
-        hud.setPeer(msg.status);
-        if (msg.status !== 'gone' || online === null) return;
-        peerLeft = true;
-        // After the Match there's no rematch, and the Court closes; the Match-over panel says so.
-        if (isOver()) {
-          offer.left = true;
+        hud.setPeer(msg.status, opponent);
+        if (msg.status === 'bot') {
+          // The Takeover Bot plays on for them. The Court closes once the Match is over: no rematch, and no news.
+          peerLeft = true;
+          offer.bot = true;
           showRematch(offer);
+          hud.setOnline(side, `${opponent} (Bot)`);
           return;
         }
-        // Until the Takeover Bot (issue 14), the Match can't go on without them, and the Court ends it.
-        showOnlineStatus(`${opponent} left.`);
-        setTimeout(quitToMenu, PEER_LEFT_MS);
+        // `gone` comes only once the Match is over (mid-Match it's `bot`): there's no rematch, and the Court closes; the
+        // Match-over panel says so.
+        if (msg.status !== 'gone' || online === null || !isOver()) return;
+        peerLeft = true;
+        offer.left = true;
+        showRematch(offer);
       } else if (msg.t === 'over') over = true;
       else if (msg.t === 'rematch') {
         offer.asked[msg.side] = true;

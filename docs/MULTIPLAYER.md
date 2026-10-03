@@ -419,18 +419,20 @@ Exit: rallies at 150 ms RTT feel like single-player for the hitter, remote swing
 
 Checked by the agent in Playwright at about 165 ms round trip (issue 11's comment); the user's check by hand is still to come.
 
-### Phase 5: Online Match flow
+### Phase 5: Online Match flow ✅
 
 Issues: 12 (online time rules, leaving, stalls), 13 (rematch), 14 (Takeover Bot).
 
 
 - **No time distortion online:** Fault Replays off (banner only), hit-stop off, `gameSpeed` fixed at 1, and `MAX_FRAME` stalls resync the clock instead of dropping time. Offline is unchanged.
 - **Pause** online becomes a "Leave match?" menu, not a Sim pause. **Match over** offers a rematch (both players press), which makes a new seed in the same Court. The Court doesn't return to the list.
-- **Takeover Bot:** after the grace period, the Bot plays the disconnected Side, with its Intents logged and contact supplied by the adapter, as in Part 3. The remaining Player sees "<name> disconnected — a Bot has taken over."
+- **Takeover Bot:** after the grace period, the Bot plays the disconnected Side, with its Intents logged and contact supplied by the adapter, as in Part 3. The remaining Player sees "<name> disconnected — a Bot has taken over.", and the Hud names the opponent "<name> (Bot)". There's no rematch after a takeover: the Court closes when the Match is over.
   - Harness tests: a takeover mid-Rally; a rewind across Bot Ticks replays the log and never calls `think` twice; the Bot still makes Contact after a late human hit changes the ball's path.
 - A tab going hidden relies on the missing-input decay.
 
 Exit: a full Long (best of 3) Match online with Faults and a rematch. A Player closing their tab partway through is replaced by the Takeover Bot, and the Match finishes.
+
+Checked by the agent in Playwright on `wrangler dev` (issue 14's comment).
 
 ### Phase 6: Ship
 

@@ -111,8 +111,12 @@ export function rematchTimedOut(s: Seats, now: number): boolean {
   return s.rematch !== null && now >= s.rematch.since + REMATCH_MS;
 }
 
-/** The Match is over at `now`: the Players have `REMATCH_MS` to both ask for another. */
+/**
+ * The Match is over at `now`: the Players have `REMATCH_MS` to both ask for another. If the Takeover Bot finished it,
+ * there's no rematch, and the Court closes.
+ */
 export function over(s: Seats, now: number): Seats {
+  if (s.seats.some((seat) => seat?.status === 'gone')) return { ...s, closed: true };
   return { ...s, rematch: { since: now, asked: [false, false] } };
 }
 
@@ -139,13 +143,15 @@ export function nextExpiry(s: Seats): number | null {
 
 /**
  * Each Player whose status went from `before` to `after`, once the Match has started, for their opponent's `peer`.
- * Before the start, the waiting panel has nothing to show.
+ * Before the start, the waiting panel has nothing to show. A Player gone while a Match is on is `bot`: the Takeover
+ * Bot plays on for them.
  */
 export function changes(before: Seats, after: Seats): { side: SideIndex; status: PeerStatus }[] {
   if (!after.started) return [];
   return ([0, 1] as const).flatMap((side) => {
     const status = after.seats[side]?.status;
-    return status !== undefined && status !== before.seats[side]?.status ? [{ side, status }] : [];
+    if (status === undefined || status === before.seats[side]?.status) return [];
+    return [{ side, status: status === 'gone' && after.rematch === null && !after.closed ? 'bot' : status }];
   });
 }
 

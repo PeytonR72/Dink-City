@@ -4,7 +4,7 @@ import { isQIntent, type QIntent } from './intentCodec';
 import { isPresetId, type PresetId } from './presets';
 
 /** Bump when a message changes shape. The handshake refuses a mismatch with `version`. */
-export const PROTOCOL_VERSION = 7;
+export const PROTOCOL_VERSION = 8;
 
 /**
  * Why the Court refused or dropped a client. Every code but `bad_message` closes the socket. `host_left`: the Host
@@ -95,7 +95,8 @@ export type SnapEvent = SimEvent & { tick: number };
  * any), the Intents the Court stepped the Tick before `state` with (`last`: a client's guess at its opponent's next ones),
  * and every event since the previous `snap`. `pong` answers a `ping` with the Court's Tick when it was sent,
  * fractional: the Ticks stepped plus how far the Court's clock is into the next. `peer` tells a Player, once the
- * Match has started, that the Player on `side` disconnected (`grace`), came back (`connected`), or is `gone` for good.
+ * Match has started, that the Player on `side` disconnected (`grace`), came back (`connected`), is `gone` for good, or
+ * was replaced by the Takeover Bot (`bot`) when their grace ran out during the Match.
  * `rematch` tells both Players that the Player on `side` asked for a rematch; once both have, a new `start` follows.
  */
 export type CourtMsg =
@@ -110,7 +111,7 @@ export type CourtMsg =
 
 /** A seated Player's link to the Court: `grace` while their seat waits for them to come back. */
 export type PeerStatus = (typeof PEER_STATUSES)[number];
-const PEER_STATUSES = ['connected', 'grace', 'gone'] as const;
+const PEER_STATUSES = ['connected', 'grace', 'gone', 'bot'] as const;
 
 /** A Snapshot: see `CourtMsg`. */
 export interface SnapMsg {

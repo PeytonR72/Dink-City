@@ -189,7 +189,7 @@ describe('Court seats', () => {
     expect(players(hosted())).toEqual([{ name: 'Host', connected: true }, null]);
   });
 
-  it('tells what changed for each Player after the start: disconnected, back, or gone', () => {
+  it('tells what changed for each Player after the start: disconnected, back, or replaced by the Takeover Bot', () => {
     const playing = start(full());
     const away = disconnect(playing, 1, T0);
     expect(changes(playing, away)).toEqual([{ side: 1, status: 'grace' }]);
@@ -197,8 +197,16 @@ describe('Court seats', () => {
     expect(changes(away, back)).toEqual([{ side: 1, status: 'connected' }]);
     const bothAway = disconnect(away, 0, T0 + 1000);
     const gone = expire(bothAway, T0 + GRACE_MS);
-    expect(changes(bothAway, gone)).toEqual([{ side: 1, status: 'gone' }]);
+    expect(changes(bothAway, gone)).toEqual([{ side: 1, status: 'bot' }]);
     expect(changes(gone, gone)).toEqual([]);
+  });
+
+  it('closes the Court when a Match the Takeover Bot played ends: there is no rematch', () => {
+    const gone = expire(disconnect(start(full()), 1, T0), T0 + GRACE_MS);
+    const ended = over(gone, T0 + GRACE_MS + 60_000);
+    expect(ended.closed).toBe(true);
+    expect(askRematch(ended, 0).start).toBe(false);
+    expect(over(start(full()), T0).closed).toBe(false);
   });
 
   it('tells nothing before the start: the waiting panel shows who is seated', () => {

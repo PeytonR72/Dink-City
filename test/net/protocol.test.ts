@@ -99,6 +99,7 @@ describe('the Court protocol', () => {
       { t: 'peer', side: 1, status: 'grace' },
       { t: 'peer', side: 0, status: 'connected' },
       { t: 'peer', side: 1, status: 'gone' },
+      { t: 'peer', side: 0, status: 'bot' },
       { t: 'rematch', side: 0 },
       { t: 'rematch', side: 1 },
     ];
