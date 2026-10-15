@@ -61,3 +61,7 @@ npm run art
 # Rebuild specific assets
 npm run art -- player park
 ```
+
+## Motion controls
+
+Keyboard remains the default. Choose Motion in Settings or press M during play. See [the motion runbook and acceptance checklist](docs/MOTION-CONTROLS.md) for local relay setup, phone HTTPS requirements, debug input, tests and remaining real-device acceptance gates.

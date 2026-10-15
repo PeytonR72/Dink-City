@@ -51,6 +51,8 @@ export interface Intent {
   shot: ShotType | null;
   /** This Tick is the Player's Contact (online, `reported` Sides only). See Reported Contact in CONTEXT.md. */
   contact?: boolean;
+  /** A fresh type press explicitly resets Commit timing, even at reported Contact (keyboard parity, ADR-0005). */
+  recommit?: boolean;
 }
 
 export interface Commit {

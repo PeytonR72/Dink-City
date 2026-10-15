@@ -1,0 +1,8 @@
+<!doctype html>
+<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="theme-color" content="#163a36"><title>Dink City · Phone controller</title></head>
+<body><main><p class="eyebrow">DINK CITY</p><h1>Your phone is your paddle.</h1><p id="status" role="status" aria-live="polite">Tap below to begin.</p>
+<section id="enable"><p>Keep a firm grip and leave room to swing.</p><button id="permission">Tap to enable motion</button></section>
+<section id="calibrate" hidden><h2>Find your ready position</h2><p>Hold your phone like a paddle, then tap Ready.</p><label>Playing hand <select id="hand"><option value="right">Right</option><option value="left">Left</option></select></label><button id="ready">Ready</button></section>
+<section id="playing" hidden><p id="last-swing">Waiting for your first swing</p><button id="recalibrate">Recalibrate</button><button id="reconnect">Reconnect</button></section>
+<section id="motion-debug" hidden><h2>Sensor lab</h2><p>Rotation speed (green) and acceleration magnitude (orange). Raw values below.</p><p id="last-peak">No peak detected yet</p><canvas id="trace" width="600" height="180"></canvas><pre id="sensor-values"></pre><div id="tuning"></div><label>Trace label <select id="label"><option>soft</option><option>drive</option><option>lob</option><option>miss</option></select></label><label>Participant alias <input id="participant" maxlength="40" placeholder="e.g. tester-a"></label><button id="record">Record trace</button><p>Record one gesture per file. Walking or putting the phone down should be labeled miss. Maximum 60 seconds.</p></section>
+</main><script type="module" src="/src/controller/phone.ts"></script></body></html>

@@ -72,6 +72,30 @@ describe('Reported Contact', () => {
   const sweet = { x: 0.2, y: 0.9, z: 3.55 };
   const hitOf = (s: SimState) => s.events.find((e) => e.kind === 'hit');
 
+  it('changes type at reported Contact without losing early timing', () => {
+    const s = rallyWithBall(sweet);
+    s.sides[0].players[0].commit = { type: 'soft', tick: 50, bestDistance: 0.25 };
+    const hit = hitOf(step(s, [{ ...report, shot: 'drive' }, idle], t));
+    const early = rallyWithBall(sweet);
+    expect(hit).toMatchObject({ type: 'drive', factors: { timing: hitOf(step(early, [report, idle], t))!.factors.timing } });
+    const distant = rallyWithBall({ x: 0, y: 0.9, z: -3 });
+    distant.sides[0].players[0].commit = { type: 'soft', tick: 50, bestDistance: 0.25 };
+    const changed = step(distant, [{ ...report, shot: 'lob' }, idle], t);
+    expect(changed.sides[0].players[0].commit?.tick).toBe(50);
+    expect(s.sides[0].players[0].commit.type).toBe('soft');
+  });
+  it('plain re-presses, auto Sides and first Commits retain their timing semantics', () => {
+    for (const mode of ['auto', 'reported'] as const) {
+      const s = rallyWithBall({ x: 0, y: 0.9, z: 1.5 });
+      s.match.config.contactMode = [mode, 'auto'];
+      s.sides[0].players[0].commit = { type: 'soft', tick: 50, bestDistance: 0.25 };
+      const changed = step(s, [{ ...idle, shot: 'drive', contact: mode === 'auto' }, idle], t);
+      expect(changed.sides[0].players[0].commit).toEqual({ type: 'drive', tick: 101, bestDistance: null });
+      s.sides[0].players[0].commit = null;
+      expect(step(s, [{ ...report, shot: 'lob' }, idle], t).sides[0].players[0].commit?.tick).toBe(101);
+    }
+  });
+
   it('hits a sweet-spot ball when the Player reports it', () => {
     expect(hitOf(step(rallyWithBall(sweet), [report, idle], t))).toMatchObject({ side: 0, quality: 1 });
   });

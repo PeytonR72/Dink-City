@@ -6,8 +6,9 @@
   "durable_objects": {
     "bindings": [
       { "name": "COURT", "class_name": "Court" },
-      { "name": "LOBBY", "class_name": "Lobby" }
+      { "name": "LOBBY", "class_name": "Lobby" },
+      { "name": "CONTROLLER", "class_name": "Controller" }
     ]
   },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Court", "Lobby"] }]
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Court", "Lobby"] }, { "tag": "v2", "new_sqlite_classes": ["Controller"] }]
 }

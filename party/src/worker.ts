@@ -1,9 +1,11 @@
 import { getServerByName, routePartykitRequest } from 'partyserver';
 import { isCourtCode, isPresetId, makeCourtCode, validateDisplayName } from '../../src/net';
+import { isPairCode } from '../../src/net/controller';
 import type { Env } from './env';
 import { LOBBY_NAME } from './lobby';
 import { isAllowedOrigin } from './origin';
 
+export { Controller } from './controller';
 export { Court } from './court';
 export { Lobby } from './lobby';
 
@@ -20,8 +22,8 @@ export default {
     if (new URL(request.url).pathname === '/create') return create(request, env, origin);
     const response = await routePartykitRequest(request, env, {
       onBeforeConnect: (_req, { className, name }) => {
-        if (!isAllowedOrigin(origin)) return new Response('Forbidden', { status: 403 });
-        const known = className === 'COURT' ? isCourtCode(name) : className === 'LOBBY' && name === LOBBY_NAME;
+        if (!isAllowedOrigin(origin, className === 'CONTROLLER' ? env : undefined)) return new Response('Forbidden', { status: 403 });
+        const known = className === 'CONTROLLER' ? isPairCode(name) : className === 'COURT' ? isCourtCode(name) : className === 'LOBBY' && name === LOBBY_NAME;
         if (!known) return new Response('Not found', { status: 404 });
       },
       // Only WebSockets reach the Durable Objects from outside. The Worker talks to them over RPC.

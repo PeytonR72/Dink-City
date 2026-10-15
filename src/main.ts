@@ -3,6 +3,11 @@ import { playEvents, unlockAudio } from './audio/sfx';
 import { DIFFICULTY, createBot } from './bot/bot';
 import { PERSONALITY, type PersonalityName } from './bot/personality';
 import { Hud } from './hud/hud';
+import { ScreenController } from './controller/screen';
+import { PairingPanel } from './controller/pairing';
+import { motionTuning } from './input/motionTuning';
+import type { ShotType, Vec2 } from './sim';
+import type { ControlMode } from './save/settings';
 import { Input } from './input/input';
 import type { MatchDriver, MatchView } from './match/driver';
 import { LocalMatch } from './match/local';
@@ -51,7 +56,7 @@ const failed = (e: unknown): never => {
 };
 const models = await loadModels().catch(failed);
 const renderer = new Renderer(canvas, viewTuning, simTuning, models);
-const input = new Input();
+const input = new Input(simTuning);
 const eventLog: ({ tick: number } & SimEvent)[] = [];
 /** Where either driver shows the Match: the Hud, the renderer and the sounds. */
 const view: MatchView = {
@@ -68,6 +73,7 @@ const view: MatchView = {
     showSwingsAndSounds(s, events);
     for (const e of events) {
       eventLog.push({ tick: s.tick, ...e });
+      if (e.kind === 'hit' && e.side === match.local && input.mode === 'motion') controller.hit();
       // Online Matches earn no progress (ADR-0004).
       if (e.kind === 'match' && e.winner === match.local && match === offline) onMatchWon();
     }
@@ -87,7 +93,7 @@ const view: MatchView = {
 const offline = new LocalMatch({
   sim: simTuning,
   viewTuning,
-  input: () => input.sample(),
+  input: () => sampleLocal(offline.curr, offline.local),
   rematch: () => newMatch(Date.now()),
   view,
 });
@@ -145,13 +151,13 @@ const menu = new Overlay(
 );
 const map = new CityMap((id) => void playVenue(id));
 menu.el.querySelector('.menu-map')!.append(map.el);
-menu.el.querySelector('#open-locker')!.before(
-  new SettingsPanel(saved, (s) => {
+const settingsPanel = new SettingsPanel(settings(), (s) => {
     saved = s;
     saveSettings(store, s);
     viewTuning.sunset = settings().sunset;
-  }).el,
-);
+    setControls(s.controls);
+  });
+menu.el.querySelector('#open-locker')!.before(settingsPanel.el);
 menu.on('#open-locker', () => setMode('locker'));
 menu.on('#open-practice', () => startPractice());
 if (ONLINE) {
@@ -187,7 +193,7 @@ const pause = new Overlay(
   <button id="resume" class="primary">Resume</button>
   <button id="quit">Quit to map</button>`,
 );
-pause.on('#resume', () => setMode('match'));
+pause.on('#resume', () => { if (!controllerPaused || input.controller || input.mode === 'keyboard') { controllerPaused = false; setMode('match'); } });
 pause.on('#quit', () => quitToMenu());
 
 /** Online, Esc opens this instead of pausing: the Court doesn't wait, so the Match plays on behind it. */
@@ -220,6 +226,65 @@ const onlineOver = new Overlay(
 onlineOver.on('#rematch', () => court?.send({ t: 'rematch' }));
 onlineOver.on('#back-to-map', () => quitToMenu());
 
+const controlBadge = document.createElement('button');
+controlBadge.id = 'control-mode'; controlBadge.title = 'Switch controls (M)';
+document.body.append(controlBadge);
+let controllerPaused = false;
+let wasConnected = false;
+const controller = new ScreenController({
+  onSwing: swing => { if (mode === 'match' && !(match === offline && offline.replay)) input.swing(swing); },
+  onTilt: aim => { if (input.mode === 'motion') input.motion.tilt(aim); },
+  onStatus() {
+    const connected = controller.status === 'connected';
+    input.controller = connected;
+    if (connected !== wasConnected) input.clear();
+    if (wasConnected && !connected && input.mode === 'motion' && (mode === 'match' || mode === 'paused')) {
+      if (match === offline) { controllerPaused = true; setMode('paused'); pause.el.querySelector('h1')!.textContent = 'Controller disconnected'; }
+      else { setControls('keyboard'); hud.note('Controller disconnected — KEYBOARD'); }
+    }
+    if (connected && !wasConnected) pairing.el.hidden = true;
+    wasConnected = connected;
+    pairing?.refresh(); refreshControls();
+  },
+});
+const pairing = new PairingPanel(controller, () => setControls('keyboard'));
+const pauseControls = document.createElement('button'); pauseControls.id = 'pause-controls';
+pauseControls.onclick = () => toggleControls(); pause.el.querySelector('#quit')!.before(pauseControls);
+controlBadge.onclick = () => { if (input.mode === 'motion') { controller.open(); pairing.show(); } else setControls('motion'); };
+const debugLatency = params.has('debug') ? document.createElement('div') : null;
+if (debugLatency) { debugLatency.id = 'motion-latency'; document.body.append(debugLatency); }
+function refreshControls() {
+  const label = input.mode.toUpperCase();
+  const state = input.mode === 'motion' ? (input.controller ? ' · Controller connected · ' + (controller.rtt === null ? 'measuring RTT' : Math.round(controller.rtt) + ' ms RTT') : input.debugMotion ? ' · Debug Swing' : ' · Keyboard fallback') : '';
+  controlBadge.textContent = label + state; pauseControls.textContent = 'Controls: ' + label + ' (M)';
+  if (debugLatency) debugLatency.textContent = 'Controller RTT: ' + (controller.rtt === null ? '—' : Math.round(controller.rtt) + ' ms') + ' · lead ' + motionTuning.swingLeadMs + ' ms · window ' + motionTuning.swingWindowTicks + ' ticks';
+  (pause.el.querySelector('#resume') as HTMLButtonElement).disabled = controllerPaused && !input.controller && input.mode === 'motion';
+  settingsPanel.update({ ...saved, controls: input.mode });
+}
+function setControls(controls: ControlMode) {
+  input.setMode(controls); input.debugMotion = false;
+  saved = { ...saved, controls }; saveSettings(store, saved);
+  params.delete('motion');
+  if (controls === 'motion' && !input.controller) { controller.open(); pairing.show(); }
+  else pairing.el.hidden = true;
+  if (controls === 'keyboard' && controllerPaused) { controllerPaused = false; setMode('match'); }
+  hud.note(controls.toUpperCase()); refreshControls();
+}
+function toggleControls() { setControls(input.mode === 'keyboard' ? 'motion' : 'keyboard'); }
+function sampleLocal(state: SimState, side: SideIndex) { input.prepare(state, side); return input.sample(); }
+function debugSwing(type: ShotType, aim: Vec2 = { x: 0, y: 0 }) {
+  if (!(import.meta.env.DEV || params.has('debug')) || mode !== 'match' || input.mode !== 'motion' || (match === offline && offline.replay)) return;
+  if (!['soft', 'drive', 'lob'].includes(type)) return;
+  input.debugMotion = true; pairing.el.hidden = true; refreshControls();
+  input.swing({ type, aim, strength: 1, at: Date.now() });
+}
+window.addEventListener('keydown', event => {
+  if (event.repeat || event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement || event.target instanceof HTMLSelectElement) return;
+  if (event.code === 'KeyM' && (mode === 'match' || mode === 'paused')) { event.preventDefault(); toggleControls(); }
+  if (event.code === 'Space' && params.has('debug') && input.mode === 'motion') { event.preventDefault(); debugSwing('drive'); }
+});
+window.addEventListener('pagehide', () => controller.close());
+
 /**
  * The rematch as the Court has told this screen: who has asked, and whether the opponent left instead, or the
  * Takeover Bot played for them, after which there's none.
@@ -251,6 +316,7 @@ let last = performance.now();
 
 /** A new Match against the Bot of the Venue on show. */
 function newMatch(seed: number) {
+  input.reset();
   const s = settings();
   difficulty = s.difficulty;
   viewTuning.sunset = s.sunset;
@@ -266,6 +332,7 @@ function newMatch(seed: number) {
 /** Practice mode at the Venue on show: the ball machine plays Side 1, and there is no score. */
 function startPractice() {
   if (match !== offline) return;
+  input.reset();
   const p = new Practice();
   const machine = createMachine(Date.now(), simTuning, () => p.step);
   renderer.setMachine(true);
@@ -306,6 +373,7 @@ let drive: ((s: SimState) => Intent) | null = null;
  * reloads the page offline, which drops the Court and its driver.
  */
 function quitToMenu() {
+  controller.close(); pairing.el.hidden = true; controllerPaused = false;
   if (match === offline) return setMode('menu');
   court?.leave();
   location.assign(location.pathname);
@@ -421,10 +489,11 @@ async function goOnline(name: string, target: { preset: PresetId } | { code: str
           local: side,
           start: createInitialState(msg.seed, onlineConfig(msg.preset)),
           view,
-          input: () => (mode !== 'match' ? STILL : drive ? drive(online!.latest) : input.sample()),
+          input: () => (mode !== 'match' ? STILL : drive ? drive(online!.latest) : sampleLocal(online!.predicted.curr, side)),
           send: (m) => link.send(m),
           tuning: simTuning,
         });
+        input.reset();
         match = online;
         renderer.setLocalSide(side);
         renderer.setMachine(false);
@@ -501,13 +570,18 @@ function setMode(m: Mode) {
     map.refresh(progress);
     map.focusFirst();
   }
-  if (m === 'paused') (match === offline ? pause : leaveMenu).show();
-  if (m === 'match') (document.activeElement as HTMLElement | null)?.blur?.();
+  if (m === 'paused') { if (!controllerPaused) pause.el.querySelector('h1')!.textContent = 'Paused'; (match === offline ? pause : leaveMenu).show(); }
+  if (m === 'match') {
+    (document.activeElement as HTMLElement | null)?.blur?.();
+    if (input.mode === 'motion' && !input.debugMotion && controller.status === 'idle') { controller.open(); pairing.show(); }
+  }
   document.body.dataset.mode = m;
   input.clear();
   last = performance.now();
 }
 
+input.setMode(settings().controls);
+refreshControls();
 newMatch(Date.now());
 const courtParam = ONLINE ? params.get('court') : null;
 const linked = courtParam === null ? null : readCourtCode(courtParam);
@@ -518,6 +592,7 @@ if (courtParam !== null && !linked) {
 else if (linked) void openLobby(`Pick a Display name, then join Court ${linked}.`, linked);
 else if (params.has('practice')) startPractice();
 else setMode(params.has('play') ? 'match' : 'menu');
+if (input.mode === 'motion') { controller.open(); pairing.show(); }
 // The menu doesn't draw the court, so draw it once: the Park stands behind the map until a Venue is played.
 if (mode === 'menu') renderer.render(match.prev, match.curr, 1, 0);
 
@@ -547,6 +622,10 @@ if (import.meta.env.DEV && params.has('debug')) {
   },
   simTuning,
   viewTuning,
+  motionTuning,
+  swing: debugSwing,
+  get controls() { return input.mode; },
+  get controller() { return { code: controller.code, status: controller.status, rtt: controller.rtt }; },
   eventLog,
   newMatch,
   playVenue,
@@ -611,7 +690,7 @@ function update(dt: number) {
   if (input.pausePressed()) {
     if (mode === 'match' && match.curr.phase === 'over') quitToMenu();
     else if (mode === 'match') setMode('paused');
-    else if (mode === 'paused') setMode('match');
+    else if (mode === 'paused' && (!controllerPaused || input.controller || input.mode === 'keyboard')) { controllerPaused = false; setMode('match'); }
     else if (mode === 'locker' || mode === 'lobby') setMode('menu');
   }
   // Online the Match-over panel offers a rematch or the way back to the map, in place of the shot press offline.

@@ -51,8 +51,8 @@ describe('the Intent codec', () => {
   it('round-trips every shot, and the contact flag', () => {
     for (const shot of [null, 'soft', 'drive', 'lob'] as const) {
       expect(dequantizeIntent(quantizeIntent(intent(0, 1, 0, 0, shot))).shot).toBe(shot);
-      const reported = dequantizeIntent(quantizeIntent({ ...intent(0, 0, 0, 0, shot), contact: true }));
-      expect(reported).toMatchObject({ shot, contact: true });
+      const reported = dequantizeIntent(quantizeIntent({ ...intent(0, 0, 0, 0, shot), contact: true, recommit: true }));
+      expect(reported).toMatchObject({ shot, contact: true, recommit: true });
     }
     expect(dequantizeIntent(quantizeIntent({ ...intent(0, 0, 0, 0), contact: false })).contact).toBeFalsy();
   });
@@ -64,7 +64,7 @@ describe('the Intent codec', () => {
 
   it('is exact once quantized: quantize ∘ dequantize is the identity on QIntent', () => {
     for (let n = 0; n < 500; n++) {
-      const q: QIntent = [((n * 37) % 255) - 127, ((n * 91) % 255) - 127, ((n * 13) % 255) - 127, ((n * 53) % 255) - 127, n % 8];
+      const q: QIntent = [((n * 37) % 255) - 127, ((n * 91) % 255) - 127, ((n * 13) % 255) - 127, ((n * 53) % 255) - 127, n % 16];
       expect(quantizeIntent(dequantizeIntent(q))).toEqual(q);
     }
   });

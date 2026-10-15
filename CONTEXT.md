@@ -76,3 +76,14 @@ The physical playing area. For the online room, see **Court** under Online play.
 - **Reported Contact**: online, a human Player's client flags the Tick of Contact in its Intent (`contact`), and the Court checks reach and the rules before the Sim computes the shot. Offline, the Sim finds Contact itself (`contactMode: 'auto'`).
 - **Rewind window**: how far back (15 Ticks) the Court re-simulates for a late Intent or Contact report.
 - **Takeover Bot**: a Bot that plays a disconnected Player's Side, inside the Court, once their grace period runs out, for the rest of the Match (with no rematch after). On a Rewind its logged Intents are replayed, never re-thought; only its Contact is worked out again, from the corrected state.
+
+### Motion controls (ADR-0005)
+
+- **Control mode**: client-only choice of Keyboard (keyboard/gamepad, default) or Motion input.
+- **Controller**: a phone paired to the game screen, sending Swings.
+- **Pair code**: a short code, also shared as a QR link, joining one Controller to one screen.
+- **Swing**: a recognized phone gesture with Shot type, Aim and timestamp.
+- **Auto-move**: Motion footwork from Neutral Bot positioning, overridden by held keys or stick.
+- **Swing window**: the few Ticks after a Swing during which contact stays on.
+
+Offline local Sides now use Reported Contact in both modes; Keyboard supplies autoContact, Motion supplies Swings. Bot Sides stay auto.

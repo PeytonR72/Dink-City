@@ -721,3 +721,6 @@ body[data-practice='true'] #scoreboard {
   font-weight: 800;
   color: #ffd23f;
 }
+
+/* Motion pairing stays compact so keyboard fallback remains playable. */
+#control-mode{position:fixed;bottom:14px;right:16px;z-index:18;font-size:11px;padding:7px 10px;opacity:.88}body[data-mode=menu] #control-mode,body[data-mode=locker] #control-mode{display:none}#controller-pairing{position:fixed;right:20px;top:16px;z-index:40;width:min(340px,calc(100vw - 40px));max-height:90vh;overflow:auto;padding:22px;background:#123d35;color:#eff7e8;border:1px solid #9cbd9f;border-radius:16px;box-shadow:0 12px 48px #0006;font:14px/1.5 system-ui}#controller-pairing h2{margin-top:0}#controller-pairing button{font:inherit;margin:5px;padding:7px}.pair-qr{max-width:200px;margin:12px auto;background:white;padding:8px}.pair-qr svg{width:100%;display:block}.pair-link{display:block;text-align:center;letter-spacing:.12em;color:#d3f3a5;font-weight:bold}#motion-latency{position:fixed;left:12px;bottom:12px;font:11px monospace;color:white;background:#0008;padding:5px;z-index:18}[hidden]{display:none!important}

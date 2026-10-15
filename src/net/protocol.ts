@@ -4,7 +4,7 @@ import { isQIntent, type QIntent } from './intentCodec';
 import { isPresetId, type PresetId } from './presets';
 
 /** Bump when a message changes shape. The handshake refuses a mismatch with `version`. */
-export const PROTOCOL_VERSION = 8;
+export const PROTOCOL_VERSION = 9;
 
 /**
  * Why the Court refused or dropped a client. Every code but `bad_message` closes the socket. `host_left`: the Host

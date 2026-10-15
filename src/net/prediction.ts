@@ -160,11 +160,14 @@ export function createPredictor(opts: { local: SideIndex; start: SimState; tunin
       // Up to `tick` first, fading any Ticks skipped, so the hit is called from the state the Tick steps from.
       head = Math.max(head, tick);
       const told = advance();
-      let wire = dequantizeIntent(quantizeIntent({ ...intent, contact: false }));
-      if (curr.tick === tick) {
+      let wire = dequantizeIntent(quantizeIntent({ ...intent, contact: intent.contact ?? false }));
+      if (curr.tick === tick && intent.contact === undefined) {
         const intents = intentsNow();
         intents[local] = wire;
-        if (callsHit(curr, intents, local)) wire = { ...wire, contact: true };
+        if (callsHit(curr, intents, local)) {
+          const commit = curr.sides[local].players[0].commit;
+          wire = { ...wire, contact: true, ...(wire.shot && commit && wire.shot !== commit.type ? { recommit: true } : {}) };
+        }
       }
       stamped.set(tick, wire);
       head = Math.max(head, tick + 1);

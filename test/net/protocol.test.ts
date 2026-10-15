@@ -72,7 +72,7 @@ describe('the Court protocol', () => {
       { t: 'in', from: 3, intents: [ok, [0, 0, 0, 0, 0, 0]] },
       { t: 'in', from: 3, intents: [[128, 0, 0, 0, 0]] },
       { t: 'in', from: 3, intents: [[0, 0, 0.5, 0, 0]] },
-      { t: 'in', from: 3, intents: [[0, 0, 0, 0, 8]] },
+      { t: 'in', from: 3, intents: [[0, 0, 0, 0, 16]] },
       { t: 'in', from: 3, intents: [[0, 0, 0, 0, -1]] },
       { t: 'in', from: 3, intents: [[0, 0, 0, '0', 0]] },
       { t: 'in', from: 3, intents: [{ 0: 0, 1: 0, 2: 0, 3: 0, 4: 0, length: 5 }] },

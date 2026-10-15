@@ -3,7 +3,7 @@ import type { Intent, ShotType } from '../sim';
 
 /**
  * A quantized Intent: `[moveX, moveY, aimX, aimY, bits]`. The four axes are int8 (-127..127, for -1..1);
- * `bits` is the shot (0 none, 1 Soft, 2 Drive, 3 Lob) plus 4 for `contact`.
+ * `bits` is the shot (0 none, 1 Soft, 2 Drive, 3 Lob) plus 4 for `contact` and 8 for `recommit`.
  *
  * Gamepad values aren't exact in int8, so an online client must step its own prediction with
  * `dequantizeIntent(quantizeIntent(i))`, never the raw Intent, or its prediction and the Court's result drift
@@ -13,11 +13,12 @@ export type QIntent = [number, number, number, number, number];
 
 const SHOTS: readonly (ShotType | null)[] = [null, 'soft', 'drive', 'lob'];
 const CONTACT = 4;
+const RECOMMIT = 8;
 const AXIS = 127;
 
 /** An Intent for the wire. */
 export function quantizeIntent(i: Intent): QIntent {
-  const bits = SHOTS.indexOf(i.shot) + (i.contact ? CONTACT : 0);
+  const bits = SHOTS.indexOf(i.shot) + (i.contact ? CONTACT : 0) + (i.recommit ? RECOMMIT : 0);
   return [axis(i.move.x), axis(i.move.y), axis(i.aim.x), axis(i.aim.y), bits];
 }
 
@@ -26,6 +27,7 @@ export function dequantizeIntent(q: QIntent): Intent {
   const [mx, my, ax, ay, bits] = q;
   const intent: Intent = { move: { x: mx / AXIS, y: my / AXIS }, aim: { x: ax / AXIS, y: ay / AXIS }, shot: SHOTS[bits & 3] };
   if (bits & CONTACT) intent.contact = true;
+  if (bits & RECOMMIT) intent.recommit = true;
   return intent;
 }
 
@@ -38,7 +40,7 @@ export function hasShot(q: QIntent): boolean {
 export function isQIntent(v: unknown): v is QIntent {
   if (!Array.isArray(v) || v.length !== 5 || !v.every((n) => Number.isInteger(n))) return false;
   const bits = v[4] as number;
-  return v.slice(0, 4).every((a: number) => Math.abs(a) <= AXIS) && bits >= 0 && bits <= (SHOTS.length - 1) + CONTACT;
+  return v.slice(0, 4).every((a: number) => Math.abs(a) <= AXIS) && bits >= 0 && bits <= (SHOTS.length - 1) + CONTACT + RECOMMIT;
 }
 
 /** -1..1 to int8. `| 0` turns -0 (and NaN) into 0. */

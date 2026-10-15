@@ -4,7 +4,10 @@ import { field, readJson, writeJson, type KeyValueStore } from './store';
 
 export type DifficultyName = keyof typeof DIFFICULTY;
 
+export type ControlMode = 'keyboard' | 'motion';
+
 export interface Settings {
+  controls: ControlMode;
   rallyScoring: boolean;
   bestOf: 1 | 3;
   difficulty: DifficultyName;
@@ -12,7 +15,7 @@ export interface Settings {
   sunset: boolean;
 }
 
-export const DEFAULT_SETTINGS: Settings = { rallyScoring: false, bestOf: 1, difficulty: 'medium', sunset: false };
+export const DEFAULT_SETTINGS: Settings = { controls: 'keyboard', rallyScoring: false, bestOf: 1, difficulty: 'medium', sunset: false };
 
 const KEY = 'dink.settings';
 
@@ -24,6 +27,7 @@ export function loadSettings(store: KeyValueStore | null): Settings {
   const raw = readJson(store, KEY);
   const d = DEFAULT_SETTINGS;
   return {
+    controls: field(raw, 'controls', (v): v is ControlMode => v === 'keyboard' || v === 'motion', d.controls),
     rallyScoring: field(raw, 'rallyScoring', isBoolean, d.rallyScoring),
     bestOf: field(raw, 'bestOf', isBestOf, d.bestOf),
     difficulty: field(raw, 'difficulty', isDifficulty, d.difficulty),
@@ -39,6 +43,7 @@ export function saveSettings(store: KeyValueStore | null, settings: Settings) {
 export function withFlags(settings: Settings, params: URLSearchParams): Settings {
   const bot = params.get('bot');
   return {
+    controls: params.has('motion') ? 'motion' : settings.controls,
     rallyScoring: settings.rallyScoring || params.has('rally'),
     bestOf: params.has('bo3') ? 3 : settings.bestOf,
     difficulty: isDifficulty(bot) ? bot : settings.difficulty,

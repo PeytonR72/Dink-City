@@ -149,7 +149,10 @@ function press(s: SimState, i: SideIndex, shot: ShotType, intent: Intent, t: Sim
     return;
   }
   // Pressing the same button again keeps the earlier Commit (and its timing); a different one is a new, later Commit.
-  if (s.phase === 'rally' && player.commit?.type !== shot) player.commit = { type: shot, tick: s.tick, bestDistance: null };
+  if (s.phase === 'rally' && player.commit?.type !== shot) {
+    if (contactModeOf(s, i) === 'reported' && intent.contact && player.commit && !intent.recommit) player.commit.type = shot;
+    else player.commit = { type: shot, tick: s.tick, bestDistance: null };
+  }
 }
 
 function serve(s: SimState, i: SideIndex, shot: ShotType, intent: Intent, t: SimTuning) {

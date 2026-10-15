@@ -2,7 +2,7 @@
 import type { SimTuning } from '../sim';
 
 /** Bump when a Sim change alters play without touching `simTuning`. */
-export const SIM_VERSION = 1;
+export const SIM_VERSION = 2;
 
 /** A 32-bit FNV-1a hash (8 hex digits) of `tuning`'s canonical JSON and the Sim version. */
 export function simHash(tuning: SimTuning, version = SIM_VERSION): string {

@@ -8,6 +8,7 @@ interface Choice<K extends keyof Settings> {
 }
 
 const CHOICES = [
+  { key: 'controls', label: 'Controls', options: [['keyboard', 'Keyboard'], ['motion', 'Motion']] },
   { key: 'rallyScoring', label: 'Scoring', options: [[false, 'Side-out'], [true, 'Rally']] },
   { key: 'bestOf', label: 'Match', options: [[1, 'One game'], [3, 'Best of 3']] },
   { key: 'difficulty', label: 'Bot', options: [['easy', 'Easy'], ['medium', 'Medium'], ['hard', 'Hard']] },
@@ -43,6 +44,8 @@ export class SettingsPanel {
     }
     this.refresh();
   }
+
+  update(settings: Settings) { this.settings = settings; this.refresh(); }
 
   private refresh() {
     (CHOICES as Choice<keyof Settings>[]).forEach((choice, i) => {

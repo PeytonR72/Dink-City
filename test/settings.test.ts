@@ -24,13 +24,13 @@ const throwing: KeyValueStore = {
 
 describe('Settings', () => {
   it('are the defaults the first time', () => {
-    expect(loadSettings(memoryStore())).toEqual({ rallyScoring: false, bestOf: 1, difficulty: 'medium', sunset: false });
+    expect(loadSettings(memoryStore())).toEqual({ controls: 'keyboard', rallyScoring: false, bestOf: 1, difficulty: 'medium', sunset: false });
   });
 
   it('come back as they were saved', () => {
     const store = memoryStore();
-    saveSettings(store, { rallyScoring: true, bestOf: 3, difficulty: 'hard', sunset: true });
-    expect(loadSettings(store)).toEqual({ rallyScoring: true, bestOf: 3, difficulty: 'hard', sunset: true });
+    saveSettings(store, { controls: 'keyboard', rallyScoring: true, bestOf: 3, difficulty: 'hard', sunset: true });
+    expect(loadSettings(store)).toEqual({ controls: 'keyboard', rallyScoring: true, bestOf: 3, difficulty: 'hard', sunset: true });
   });
 
   it('fall back to the defaults when storage throws', () => {
@@ -53,6 +53,7 @@ describe('Settings', () => {
   it('are overridden by URL flags, for playtesting', () => {
     const saved = { ...DEFAULT_SETTINGS, difficulty: 'hard' as const };
     expect(withFlags(saved, new URLSearchParams('?rally&bo3&bot=easy&sunset'))).toEqual({
+      controls: 'keyboard',
       rallyScoring: true,
       bestOf: 3,
       difficulty: 'easy',
@@ -61,4 +62,13 @@ describe('Settings', () => {
     expect(withFlags(saved, new URLSearchParams(''))).toEqual(saved);
     expect(withFlags(saved, new URLSearchParams('?bot=nonsense')).difficulty).toBe('hard');
   });
+});
+
+it('validates and persists control modes and the motion flag', () => {
+  const store = memoryStore();
+  saveSettings(store, { ...DEFAULT_SETTINGS, controls: 'motion' });
+  expect(loadSettings(store).controls).toBe('motion');
+  store.data['dink.settings'] = '{"controls":"invalid"}';
+  expect(loadSettings(store).controls).toBe('keyboard');
+  expect(withFlags(DEFAULT_SETTINGS, new URLSearchParams('motion')).controls).toBe('motion');
 });

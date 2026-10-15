@@ -1,5 +1,6 @@
 // An offline Match or Practice: the local Player against a Bot, stepped on this machine. Owns the Tick
 // accumulator, hit-stop, Game speed and the Fault Replay, all presentation only (ADR-0001).
+import { keyboardContact } from '../input/input';
 import type { Bot } from '../bot/bot';
 import { observe } from '../bot/observe';
 import type { Practice } from '../practice/practice';
@@ -41,8 +42,9 @@ export class LocalMatch implements MatchDriver {
 
   /** A new Match from `state` against `bot`. */
   startMatch(state: SimState, bot: Bot) {
+    this.acc = 0; this.hitStop = 0;
     this.bot = bot;
-    this.curr = this.prev = state;
+    this.curr = this.prev = { ...state, match: { ...state.match, config: { ...state.match.config, contactMode: ['reported', 'auto'] } } };
     this.rally = { start: this.curr, intents: [] };
     this.practice = null;
     this.endReplay();
@@ -50,6 +52,7 @@ export class LocalMatch implements MatchDriver {
 
   /** Practice mode: `machine` plays the other Side, and there is no score. */
   startPractice(practice: Practice, machine: Bot) {
+    this.acc = 0; this.hitStop = 0;
     this.practice = practice;
     this.bot = machine;
     this.newRep();
@@ -58,7 +61,8 @@ export class LocalMatch implements MatchDriver {
 
   /** Each rep is a fresh Rally, served by whoever the step says. */
   private newRep() {
-    this.curr = this.prev = createInitialState(Date.now() >>> 0, DEFAULT_MATCH, this.practice!.step.server);
+    this.curr = this.prev = createInitialState(Date.now() >>> 0, { ...DEFAULT_MATCH, contactMode: ['reported', 'auto'] }, this.practice!.step.server);
+    this.rally = { start: this.curr, intents: [] };
   }
 
   /** Steps one Tick. `local` overrides the local Player's input. */
@@ -69,6 +73,7 @@ export class LocalMatch implements MatchDriver {
       return;
     }
     const intents: [Intent, Intent] = [local, this.bot.think(observe(this.curr, other(this.local)))];
+    intents[this.local] = keyboardContact(this.curr, intents, this.local, sim);
     this.prev = this.curr;
     this.curr = step(this.curr, intents, sim);
     if (this.curr.phase === 'serve' && this.prev.phase !== 'serve') {

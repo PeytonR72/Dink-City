@@ -174,10 +174,11 @@ describe('Reported Contact in the predictor', () => {
     }
   });
 
-  it('reports nothing when there is no hit to make, and never passes on a `contact` of its own', () => {
+  it('reports no automatic hit when unreachable, but preserves explicit motion contact', () => {
     const p = createPredictor({ local: 0, start: START, tuning: simTuning });
     for (let t = 0; t < 30; t++) expect(p.stamp(t, t === 10 ? { ...RIGHT, shot: 'drive' } : RIGHT).intent.contact).toBeUndefined();
-    expect(p.stamp(30, { ...RIGHT, contact: true }).intent.contact).toBeUndefined();
+    expect(p.stamp(30, { ...RIGHT, contact: true }).intent.contact).toBe(true);
+    expect(p.curr.events.some(e => e.kind === 'hit')).toBe(false);
   });
 
   it('guesses the remote Player calls their hits by the same rule', () => {

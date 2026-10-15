@@ -1,4 +1,5 @@
 // `?debug` Tweakpane panel over the live tuning objects. Only loaded in dev builds.
+import { motionTuning } from '../input/motionTuning';
 import { Pane } from 'tweakpane';
 import type { Difficulty } from '../bot/bot';
 import type { SimTuning } from '../sim';
@@ -11,6 +12,8 @@ import type { ViewTuning } from '../tuning';
 export function createDebugPanel(sim: SimTuning, view: ViewTuning, bot: Difficulty) {
   const pane = new Pane({ title: 'Tuning' });
 
+  const motion = pane.addFolder({ title: 'Motion', expanded: false });
+  for (const key of Object.keys(motionTuning) as (keyof typeof motionTuning)[]) motion.addBinding(motionTuning, key);
   const v = pane.addFolder({ title: 'View' });
   v.addBinding(view, 'gameSpeed', { min: 0.3, max: 1.5, step: 0.05 });
   v.addBinding(view, 'fov', { min: 20, max: 70, step: 1 });
