@@ -1,3 +1,4 @@
+import { touchText } from '../input/presentation';
 // Plain DOM HUD: score, server, the Fault banner, and call-outs.
 import type { PeerStatus } from '../net';
 import type { SideIndex, SimEvent, SimState } from '../sim';
@@ -73,6 +74,10 @@ export class Hud {
     this.replayTag = root.querySelector('#replay-tag')!;
     this.practice = root.querySelector('#practice')!;
     this.peer = root.querySelector('#peer')!;
+    // Mobile prompts wrap beside Menu. Keep rep feedback below the resulting card.
+    new ResizeObserver(() => {
+      root.style.setProperty('--practice-height', this.practice.getBoundingClientRect().height + 'px');
+    }).observe(this.practice);
   }
 
   /** Local Player's row first. */
@@ -81,6 +86,7 @@ export class Hud {
   }
 
   update(s: SimState, dt: number) {
+    this.replayTag.textContent = touchText('REPLAY · J / K / L to skip');
     this.order().forEach((side, row) => {
       const el = this.rows[row];
       el.querySelector('.name')!.textContent = side === this.local ? 'YOU' : this.opponent.toUpperCase();
@@ -113,7 +119,7 @@ export class Hud {
         const [a, b] = this.order().map((side) => tally[side]);
         this.show({
           title: e.winner === this.local ? 'YOU WIN' : `${this.opponent.toUpperCase()} WINS`,
-          detail: `${a}–${b}.${this.rematch ? ' Press J, K or L to play again, or Esc for the menu.' : ''}`,
+          detail: `${a}–${b}.${this.rematch ? touchText(' Press J, K or L to play again, or Esc for the menu.') : ''}`,
         });
         this.sticky = true;
       }
@@ -159,13 +165,13 @@ export class Hud {
     document.body.dataset.practice = String(p !== null);
     if (!p) return;
     this.practice.querySelector('.practice-step')!.textContent = `Step ${p.step} of ${p.steps} · ${p.title}`;
-    this.practice.querySelector('.practice-prompt')!.textContent = p.prompt;
+    this.practice.querySelector('.practice-prompt')!.textContent = touchText(p.prompt);
     this.practice.querySelector('.practice-reps')!.textContent = p.needed > 0 ? '●'.repeat(p.reps) + '○'.repeat(p.needed - p.reps) : '';
   }
 
   /** Shows the banner for a few seconds (Practice mode's rep outcomes). */
   banner(text: FaultText) {
-    this.show(text, BANNER_SECONDS);
+    this.show({ ...text, detail: touchText(text.detail), title: touchText(text.title) }, BANNER_SECONDS);
   }
 
   private show({ title, detail, emphasis }: FaultText, seconds = 0) {

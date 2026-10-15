@@ -8,6 +8,8 @@ import { PairingPanel } from './controller/pairing';
 import { motionTuning } from './input/motionTuning';
 import type { ShotType, Vec2 } from './sim';
 import type { ControlMode } from './save/settings';
+import { TouchControls } from './input/touchControls';
+import { manualLabel, setTouchPresentation } from './input/presentation';
 import { Input } from './input/input';
 import type { MatchDriver, MatchView } from './match/driver';
 import { LocalMatch } from './match/local';
@@ -80,6 +82,7 @@ const view: MatchView = {
     if (eventLog.length > 100) eventLog.splice(0, eventLog.length - 100);
   },
   replay(on) {
+    input.touch.clear();
     hud.setReplay(on);
     renderer.cut();
   },
@@ -240,26 +243,38 @@ const controller = new ScreenController({
     if (connected !== wasConnected) input.clear();
     if (wasConnected && !connected && input.mode === 'motion' && (mode === 'match' || mode === 'paused')) {
       if (match === offline) { controllerPaused = true; setMode('paused'); pause.el.querySelector('h1')!.textContent = 'Controller disconnected'; }
-      else { setControls('keyboard'); hud.note('Controller disconnected — KEYBOARD'); }
+      else { setControls('keyboard'); hud.note('Controller disconnected — ' + manualLabel().toUpperCase()); }
     }
     if (connected && !wasConnected) pairing.el.hidden = true;
     wasConnected = connected;
     pairing?.refresh(); refreshControls();
   },
 });
-const pairing = new PairingPanel(controller, () => setControls('keyboard'));
+const pairing = new PairingPanel(controller, () => setControls('keyboard'), () => syncTouch());
 const pauseControls = document.createElement('button'); pauseControls.id = 'pause-controls';
 pauseControls.onclick = () => toggleControls(); pause.el.querySelector('#quit')!.before(pauseControls);
 controlBadge.onclick = () => { if (input.mode === 'motion') { controller.open(); pairing.show(); } else setControls('motion'); };
 const debugLatency = params.has('debug') ? document.createElement('div') : null;
 if (debugLatency) { debugLatency.id = 'motion-latency'; document.body.append(debugLatency); }
+let touch: TouchControls | undefined;
+function syncTouch() {
+  if (!touch) return;
+  input.prepare(match.curr, match.local);
+  const interactive = mode === 'match' && pairing.el.hidden && !(match !== offline && match.curr.phase === 'over');
+  touch.update(interactive && input.manual, interactive);
+  setTouchPresentation(touch.eligible, input.manual);
+  document.body.toggleAttribute('data-touch-manual', touch.eligible && input.manual);
+  pairing.setManualLabel(manualLabel());
+}
 function refreshControls() {
-  const label = input.mode.toUpperCase();
-  const state = input.mode === 'motion' ? (input.controller ? ' · Controller connected · ' + (controller.rtt === null ? 'measuring RTT' : Math.round(controller.rtt) + ' ms RTT') : input.debugMotion ? ' · Debug Swing' : ' · Keyboard fallback') : '';
+  syncTouch();
+  const label = input.mode === 'keyboard' ? manualLabel().toUpperCase() : input.mode.toUpperCase();
+  const state = input.mode === 'motion' ? (input.controller ? ' · Controller connected · ' + (controller.rtt === null ? 'measuring RTT' : Math.round(controller.rtt) + ' ms RTT') : input.debugMotion ? ' · Debug Swing' : ' · ' + manualLabel() + ' fallback') : '';
   controlBadge.textContent = label + state; pauseControls.textContent = 'Controls: ' + label + ' (M)';
   if (debugLatency) debugLatency.textContent = 'Controller RTT: ' + (controller.rtt === null ? '—' : Math.round(controller.rtt) + ' ms') + ' · lead ' + motionTuning.swingLeadMs + ' ms · window ' + motionTuning.swingWindowTicks + ' ticks';
   (pause.el.querySelector('#resume') as HTMLButtonElement).disabled = controllerPaused && !input.controller && input.mode === 'motion';
   settingsPanel.update({ ...saved, controls: input.mode });
+  if (match === offline && offline.practice) showPractice();
 }
 function setControls(controls: ControlMode) {
   input.setMode(controls); input.debugMotion = false;
@@ -268,7 +283,7 @@ function setControls(controls: ControlMode) {
   if (controls === 'motion' && !input.controller) { controller.open(); pairing.show(); }
   else pairing.el.hidden = true;
   if (controls === 'keyboard' && controllerPaused) { controllerPaused = false; setMode('match'); }
-  hud.note(controls.toUpperCase()); refreshControls();
+  refreshControls(); hud.note(controls === 'keyboard' ? manualLabel().toUpperCase() : controls.toUpperCase());
 }
 function toggleControls() { setControls(input.mode === 'keyboard' ? 'motion' : 'keyboard'); }
 function sampleLocal(state: SimState, side: SideIndex) { input.prepare(state, side); return input.sample(); }
@@ -577,9 +592,11 @@ function setMode(m: Mode) {
   }
   document.body.dataset.mode = m;
   input.clear();
+  syncTouch();
   last = performance.now();
 }
 
+touch = new TouchControls(input.touch, pauseAction, refreshControls);
 input.setMode(settings().controls);
 refreshControls();
 newMatch(Date.now());
@@ -683,16 +700,19 @@ function frame(now: number) {
   requestAnimationFrame(frame);
 }
 
+function pauseAction() {
+  if (mode === 'match' && match.curr.phase === 'over') quitToMenu();
+  else if (mode === 'match') setMode('paused');
+  else if (mode === 'paused' && (!controllerPaused || input.controller || input.mode === 'keyboard')) { controllerPaused = false; setMode('match'); }
+  else if (mode === 'locker' || mode === 'lobby') setMode('menu');
+}
+
 /** One frame: menus, or the Match (its Replay included). */
 function update(dt: number) {
   updateAmbience(viewTuning);
 
-  if (input.pausePressed()) {
-    if (mode === 'match' && match.curr.phase === 'over') quitToMenu();
-    else if (mode === 'match') setMode('paused');
-    else if (mode === 'paused' && (!controllerPaused || input.controller || input.mode === 'keyboard')) { controllerPaused = false; setMode('match'); }
-    else if (mode === 'locker' || mode === 'lobby') setMode('menu');
-  }
+  if (input.pausePressed()) pauseAction();
+  syncTouch();
   // Online the Match-over panel offers a rematch or the way back to the map, in place of the shot press offline.
   const onlineOverShown = mode === 'match' && match !== offline && match.curr.phase === 'over';
   if (onlineOverShown && !onlineOver.shown) onlineOver.show();

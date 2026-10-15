@@ -3,16 +3,23 @@ import type { ScreenController } from './screen';
 export class PairingPanel {
   readonly el = document.createElement('aside');
   private code = '';
-  constructor(private controller: ScreenController, keyboard: () => void) {
+  private manualLabel = '';
+  constructor(private controller: ScreenController, keyboard: () => void, private changed: () => void = () => {}) {
     this.el.id = 'controller-pairing'; this.el.hidden = true;
     this.el.setAttribute('aria-label', 'Pair phone controller');
-    this.el.innerHTML = '<h2>Pair your phone</h2><p>Scan with your phone, enable motion, then hold it like a paddle.</p><div class="pair-qr"></div><a class="pair-link" target="_blank" rel="noopener"></a><p class="pair-status" aria-live="polite"></p><p>Keyboard still works until a phone connects. M switches controls.</p><button class="pair-retry">New pair code</button><button class="pair-keyboard">Use keyboard</button><button class="pair-hide">Hide panel</button>';
+    this.el.innerHTML = '<h2>Pair your phone</h2><p>Scan with your phone, enable motion, then hold it like a paddle.</p><div class="pair-qr"></div><a class="pair-link" target="_blank" rel="noopener"></a><p class="pair-status" aria-live="polite"></p><p class="pair-fallback">Keyboard still works until a phone connects. M switches controls.</p><button class="pair-retry">New pair code</button><button class="pair-keyboard">Use keyboard</button><button class="pair-hide">Hide panel</button>';
     this.el.querySelector('.pair-keyboard')!.addEventListener('click', keyboard);
-    this.el.querySelector('.pair-hide')!.addEventListener('click', () => { this.el.hidden = true; });
+    this.el.querySelector('.pair-hide')!.addEventListener('click', () => { this.el.hidden = true; this.changed(); });
     this.el.querySelector('.pair-retry')!.addEventListener('click', () => { controller.restart(); this.show(); });
     document.body.append(this.el);
   }
-  show() { this.el.hidden = false; this.refresh(); }
+  show() { this.el.hidden = false; this.refresh(); this.changed(); }
+  setManualLabel(label: string) {
+    if (label === this.manualLabel) return;
+    this.manualLabel = label;
+    this.el.querySelector('.pair-keyboard')!.textContent = 'Use ' + (label === 'Keyboard' ? 'keyboard' : label);
+    this.el.querySelector('.pair-fallback')!.textContent = label + ' still works until a phone connects. M switches controls.';
+  }
   refresh() {
     const c = this.controller;
     if (c.code && c.code !== this.code) {

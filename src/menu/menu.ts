@@ -1,3 +1,4 @@
+import { manualLabel } from '../input/presentation';
 // Plain DOM menus over the canvas: the start menu with its Settings panel, and the pause menu.
 import type { Settings } from '../save/settings';
 
@@ -48,6 +49,7 @@ export class SettingsPanel {
   update(settings: Settings) { this.settings = settings; this.refresh(); }
 
   private refresh() {
+    this.el.querySelector('[aria-label=Controls] button')!.textContent = manualLabel();
     (CHOICES as Choice<keyof Settings>[]).forEach((choice, i) => {
       const buttons = this.el.children[i].querySelectorAll('button');
       choice.options.forEach(([value], j) => buttons[j].setAttribute('aria-checked', String(this.settings[choice.key] === value)));

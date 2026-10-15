@@ -1,3 +1,4 @@
+import { TouchSource, mergeManual } from './touch';
 import { KeyboardInput } from './keyboard';
 import { MotionSource } from './motion';
 import { autoContact, type Intent, type SimState, type SideIndex, type SimTuning } from '../sim';
@@ -15,6 +16,7 @@ export function keyboardContact(s: SimState, intents: [Intent, Intent], side: Si
 }
 
 export class Input {
+  readonly touch = new TouchSource();
   readonly keyboard: KeyboardInput;
   readonly motion: MotionSource;
   mode: ControlMode = 'keyboard';
@@ -29,12 +31,14 @@ export class Input {
   setMode(mode: ControlMode) { this.mode = mode; this.clear(); }
   prepare(state: SimState, side: SideIndex) { this.context = { state, side }; }
   pausePressed() { return this.keyboard.pausePressed(); }
-  clear() { this.keyboard.clear(); this.motion.clear(); }
+  clear() { this.keyboard.clear(); this.motion.clear(); this.touch.clear(); }
   reset() { this.clear(); this.motion.reset(); }
   swing(swing: Swing) { if (this.mode === 'motion') this.motion.swing(swing); }
+  get manual() { return this.mode !== 'motion' || (!this.controller && !this.debugMotion) || !this.context; }
   sample(): Intent {
     const keys = this.keyboard.sample();
-    if (this.mode !== 'motion' || (!this.controller && !this.debugMotion) || !this.context) return keys;
-    return this.motion.sample(this.context.state, this.context.side, keys, Date.now());
+    if (this.manual) return mergeManual(keys, this.touch);
+    this.touch.setEnabled(false);
+    return this.motion.sample(this.context!.state, this.context!.side, keys, Date.now());
   }
 }
