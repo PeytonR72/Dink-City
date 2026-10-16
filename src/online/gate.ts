@@ -1,5 +1,5 @@
-// Whether this build offers online play. Vercel deploys `main` on every push, and production has no server until
-// issue 16 sets `VITE_PARTY_HOST` there.
+// Whether this build offers online play. The production build uses the public Worker hostname in
+// .env.production; local development can override it with VITE_PARTY_HOST.
 
 /** Offered in dev, and in a build that names its server. */
 export function onlineOffered(env: { DEV: boolean; VITE_PARTY_HOST?: string }): boolean {

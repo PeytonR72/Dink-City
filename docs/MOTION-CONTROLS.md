@@ -59,7 +59,11 @@ Play the same Venue, seed and medium difficulty in Keyboard and Motion, plus one
 
 ## Release boundary
 
-The user authorized a normal tested commit/push. main is the existing production branch in Vercel. A new Controller binding and additive v2 Durable Object migration are prepared in party/wrangler.jsonc. They have only been exercised under local Wrangler. Remote Worker deployment/migration, VITE_PARTY_HOST changes and live origin changes are separate, unapplied operations. Until a compatible Worker is deployed/configured, physical phone pairing on the hosted site cannot be claimed working. Protocol 9 and Sim version 2 require matching client/worker builds for online play.
+On 2026-10-16, the user explicitly authorized the Cloudflare deployment and hosted phone-pairing configuration, then personally renewed Wrangler OAuth access. The verified account is Peyton's account (248cbb6f0277b00de4d7482f25affa2c). Cloudflare reported no existing dink-city-party Worker, so this first deployment created the SQLite Court/Lobby (v1) and Controller (v2) classes without deleting or renaming existing data. No paid plan, new credential scope, or origin expansion was applied.
+
+The endpoint is https://dink-city-party.peytonr7272.workers.dev. Worker version d189df0a-4e81-4a79-83c8-d39b9285a2f1, tagged 049e380, serves 100% of traffic and uses protocol 9 / Sim version 2. The remote Controller smoke passed handshake, Swing relay, latest-phone replacement and screen expiry. The frontend uses the same source revision plus the public hostname in .env.production, which Vite embeds in both browser entries; development remains on localhost. Existing Vercel environment overrides, if any, take precedence. Production allows https://dink-city.vercel.app; preview origins are not added to the allowlist.
+
+Hosted synthetic verification is separate from the real iPhone/Android and network/playtest acceptance gates above.
 
 ## Verification recorded 2026-10-15
 
