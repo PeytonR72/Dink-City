@@ -40,7 +40,7 @@ export class GestureDetector {
   reset() { this.samples = []; this.last = -Infinity; this.armed = true; }
   push(sample: MotionSample, calibration: Calibration): Swing | null {
     if (!this.armed) {
-      if (sample.at - this.last >= this.tuning.cooldownMs && rotationSpeed(sample) < this.tuning.peakThreshold * this.tuning.settleRatio) { this.armed = true; this.samples = []; }
+      if (sample.at - this.last >= this.tuning.cooldownMs && rotationSpeed(sample) < this.tuning.peakThreshold * this.tuning.settleRatio) { this.armed = true; this.samples = [sample]; }
       return null;
     }
     this.samples.push(sample);

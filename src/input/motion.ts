@@ -1,6 +1,6 @@
 import { createBot, DIFFICULTY, NEUTRAL, type Bot } from '../bot/bot';
 import { observe } from '../bot/observe';
-import { TICK, type Intent, type SideIndex, type SimState, type SimTuning, type Vec2 } from '../sim';
+import { type Intent, type SideIndex, type SimState, type SimTuning, type Vec2 } from '../sim';
 import type { Swing } from '../net/controller';
 import { motionTuning, type MotionTuning } from './motionTuning';
 
@@ -9,16 +9,19 @@ export class MotionSource {
   private bot: Bot | null = null;
   private side: SideIndex = 0;
   private lastTick = -1;
-  private phase = '';
-  private shots = -1;
-  private queued: Swing | null = null;
-  private active: { swing: Swing; ticks: number } | null = null;
+  // Event handoff to the next input sample only: never a future hit window or a list of swings.
+  private pending: Swing | null = null;
+  private lastSwingAt = -Infinity;
   private aim: Vec2 = { x: 0, y: 0 };
   constructor(private sim: SimTuning, private tuning: MotionTuning = motionTuning) {}
-  swing(s: Swing) { this.queued = s; }
+  swing(s: Swing) {
+    if (!Number.isFinite(s.at) || s.at <= this.lastSwingAt) return;
+    this.lastSwingAt = s.at; this.pending = s;
+  }
   tilt(aim: Vec2) { this.aim = { x: aim.x, y: 0 }; }
-  clear() { this.queued = null; this.active = null; }
-  reset() { this.clear(); this.bot = null; this.lastTick = -1; this.aim = { x: 0, y: 0 }; }
+  // Remember consumed/cancelled timestamps so a repeated delivery cannot revive a swing.
+  clear() { this.pending = null; }
+  reset() { this.clear(); this.bot = null; this.lastTick = -1; this.lastSwingAt = -Infinity; this.aim = { x: 0, y: 0 }; }
   sample(s: SimState, side: SideIndex, keys: Intent, now: number): Intent {
     if (!this.bot || this.side !== side || s.tick < this.lastTick) {
       this.side = side;
@@ -29,30 +32,25 @@ export class MotionSource {
         get reactionTicks() { return tuning.autoCommitReactionTicks; },
       }, this.sim, NEUTRAL);
     }
-    if (s.phase !== this.phase || s.shots !== this.shots) this.active = null;
-    this.phase = s.phase; this.shots = s.shots; this.lastTick = s.tick;
+    this.lastTick = s.tick;
     const footwork = this.bot.think(observe(s, side));
     const move = keys.move.x || keys.move.y ? keys.move : footwork.move;
+    // Preparation affects footwork/shot quality only. Reported mode cannot hit without contact=true.
     let shot: Intent['shot'] = s.phase === 'rally' && s.ball.lastHitBy !== side && footwork.shot ? 'soft' : null;
     let contact = false;
-    if (this.queued) {
-      const swing = this.queued;
+    const swing = this.pending;
+    this.pending = null; // Consume even on a miss, an interruption, or a future/stale timestamp.
+    if (swing) {
       const age = now - swing.at;
-      if (age > this.tuning.maxSwingAgeMs || age < -1000 || s.phase === 'dead') this.queued = null;
-      else if (age + this.tuning.swingLeadMs >= 0) {
-        this.queued = null;
+      // Timestamps reject stale packets; they never schedule, extend or rewind contact.
+      // A little clock-estimation skew is accepted immediately, never held for a future tick.
+      if (age >= -100 && age <= this.tuning.maxSwingAgeMs) {
         this.aim = { x: swing.aim.x, y: 0 };
         if (s.phase === 'serve' || s.phase === 'over') shot = swing.type;
         else if (s.phase === 'rally' && s.ball.lastHitBy !== side) {
-          // Never replay a stale network swing in a later rally. Lead restores a bounded amount of transport age.
-          const lost = Math.floor(Math.max(0, age - this.tuning.swingLeadMs) / (TICK * 1000));
-          this.active = { swing, ticks: Math.max(0, Math.round(this.tuning.swingWindowTicks) - lost) };
+          shot = swing.type; contact = true;
         }
       }
-    }
-    if (this.active && this.active.ticks > 0 && s.phase === 'rally' && s.ball.lastHitBy !== side) {
-      shot = this.active.swing.type; this.aim = { x: this.active.swing.aim.x, y: 0 }; contact = true;
-      this.active.ticks--;
     }
     return { move, aim: { ...this.aim }, shot, contact };
   }

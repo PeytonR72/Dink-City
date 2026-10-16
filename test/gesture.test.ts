@@ -19,6 +19,43 @@ describe('synthetic gesture mechanics (not human accuracy)', () => {
     expect(count).toBe(2); d.reset(); expect(samples.map(s => d.push(s, calibration)).filter(Boolean)).toHaveLength(1);
   });
 });
+describe('modest sensitivity and repeat guards', () => {
+  const wave = (speeds: number[], at = 1000) => speeds.map((speed, i) => ({ ...synthetic(100)[0], at: at + i * 25, rotation: { alpha: speed, beta: 0, gamma: 0 } }));
+  it('accepts an 85 degree/s peak, rejects below-threshold motion, and keeps shot boundaries', () => {
+    expect(detectSwing(wave([0, 30, 85, 60]), calibration, motionTuning)?.type).toBe('soft');
+    expect(detectSwing(wave([0, 30, 84.9, 60]), calibration, motionTuning)).toBeNull();
+    expect(detectSwing(synthetic(329), calibration, motionTuning)?.type).toBe('soft');
+    expect(detectSwing(synthetic(330), calibration, motionTuning)?.type).toBe('drive');
+    expect(detectSwing(synthetic(180, 22), calibration, motionTuning)?.type).toBe('lob');
+  });
+  it('emits on a 20% fall, without waiting for the former 35% fall or replaying its tail', () => {
+    const samples = wave([0, 30, 90, 73, 72, 60, 0]); const detector = new GestureDetector(motionTuning);
+    const events = samples.map(sample => detector.push(sample, calibration));
+    expect(events.slice(0, 4)).toEqual([null, null, null, null]);
+    expect(events[4]).toMatchObject({ type: 'soft', at: samples[2].at });
+    expect(events.filter(Boolean)).toHaveLength(1);
+  });
+  it('rejects rest, slow rotation, acceleration-only jolts, sustained plateaus and stale peaks', () => {
+    for (const speeds of [[0, 0, 0, 0], [15, 35, 60, 40], [0, 0, 0, 0], [0, 90, 90, 90]]) {
+      const samples = wave(speeds); samples[2].acceleration = { x: 40, y: 40, z: 40 };
+      expect(detectSwing(samples, calibration, motionTuning)).toBeNull();
+    }
+    const slow = wave([0, 90, 0]).map((s, i) => ({ ...s, at: 1000 + i * 250 }));
+    expect(detectSwing(slow, calibration, motionTuning)).toBeNull();
+    const unordered = wave([0, 90, 0]); unordered[2].at = unordered[1].at;
+    expect(detectSwing(unordered, calibration, motionTuning)).toBeNull();
+  });
+  it('retains the settled baseline for the next short swing but never fires without settling', () => {
+    const detector = new GestureDetector(motionTuning);
+    expect(wave([0, 40, 180, 100]).map(s => detector.push(s, calibration)).filter(Boolean)).toHaveLength(1);
+    expect(wave([100, 180, 100, 180, 100], 1700).map(s => detector.push(s, calibration)).filter(Boolean)).toHaveLength(0);
+    expect(wave([0, 90, 60], 2200).map(s => detector.push(s, calibration)).filter(Boolean)).toHaveLength(1);
+    detector.reset(); // recalibration drops an incomplete peak
+    detector.push(wave([0])[0], calibration); detector.push(wave([180], 1025)[0], calibration); detector.reset();
+    expect(detector.push(wave([60], 1050)[0], calibration)).toBeNull();
+  });
+});
+
 type Trace = { source: string; participant: string; label: string; calibration: Calibration; samples: MotionSample[] };
 const dir = join(__dirname, 'fixtures/motion');
 const traces = readdirSync(dir).filter(f => f.endsWith('.json')).map(f => JSON.parse(readFileSync(join(dir, f), 'utf8')) as Trace).filter(t => t.source === 'recorded-human');

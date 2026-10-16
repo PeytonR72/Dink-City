@@ -118,7 +118,7 @@ el('motion-debug').hidden = !debug;
 if (debug) {
   for (const key of Object.keys(motionTuning) as (keyof typeof motionTuning)[]) {
     const label = document.createElement('label'); label.textContent = key;
-    const range = document.createElement('input'); range.type = 'range'; range.step = key === 'peakFallRatio' || key === 'settleRatio' || key === 'autoMoveSpeed' ? '0.05' : '1'; range.min = key === 'swingLeadMs' ? '-200' : key === 'swingWindowTicks' ? '1' : '0.05'; range.max = String(key === 'peakFallRatio' || key === 'settleRatio' || key === 'autoMoveSpeed' ? 1 : key === 'swingWindowTicks' ? 30 : key === 'swingLeadMs' ? 200 : key === 'aimDegrees' || key === 'lobPitchDegrees' ? 180 : 1500); range.value = String(motionTuning[key]);
+    const range = document.createElement('input'); range.type = 'range'; range.step = key === 'peakFallRatio' || key === 'settleRatio' || key === 'autoMoveSpeed' ? '0.05' : '1'; range.min = '0.05'; range.max = String(key === 'peakFallRatio' || key === 'settleRatio' || key === 'autoMoveSpeed' ? 1 : key === 'aimDegrees' || key === 'lobPitchDegrees' ? 180 : 1500); range.value = String(motionTuning[key]);
     range.onchange = () => { const value = Number(range.value); if (Number.isFinite(value) && value >= Number(range.min) && value <= 5000) { motionTuning[key] = value; detector.reset(); } };
     const valueLabel = document.createElement('output'); valueLabel.textContent = String(motionTuning[key]);
     range.oninput = () => { range.onchange?.call(range, new Event('change')); valueLabel.textContent = range.value; };

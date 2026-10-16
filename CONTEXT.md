@@ -84,6 +84,6 @@ The physical playing area. For the online room, see **Court** under Online play.
 - **Pair code**: a short code, also shared as a QR link, joining one Controller to one screen.
 - **Swing**: a recognized phone gesture with Shot type, Aim and timestamp.
 - **Auto-move**: Motion footwork from Neutral Bot positioning, overridden by held keys or stick.
-- **Swing window**: the few Ticks after a Swing during which contact stays on.
+- **Swing contact**: one evaluation on the next input Tick. An early or late miss is consumed; no Swing stays armed for a later ball. Auto-move and early Soft preparation cannot hit without fresh reported Contact.
 
 Offline local Sides now use Reported Contact in both modes; Keyboard supplies autoContact, Motion supplies Swings. Bot Sides stay auto.

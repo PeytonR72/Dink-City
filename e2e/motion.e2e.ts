@@ -123,10 +123,12 @@ test('phone synthetic sensors traverse calibration, relay, classification and tr
     await phone.locator('#ready').click(); console.log('phone ready', await phone.locator('#status').textContent()); await expect(page.locator('#control-mode')).toContainText('Controller connected');
     await page.waitForFunction(() => (window as unknown as { dink: Dink }).dink.controller.rtt !== null, { }, { timeout: 5000 });
     console.log('phone RTT synchronized');
+    // This flow tests a ready serve. An early press is intentionally discarded, never buffered.
+    await page.waitForFunction(() => { const s = (window as unknown as { dink: Dink }).dink.state; return s.phase === 'serve' && s.server === 0 && s.tick - s.phaseTick >= 15; });
     await phone.locator('#participant').fill('synthetic-e2e'); await phone.locator('#record').click();
-    await phone.evaluate(async () => { for (const speed of [0, 180, 450, 200, 0]) { window.dispatchEvent(new DeviceMotionEvent('devicemotion', { rotationRate: { alpha: speed, beta: 0, gamma: 0 } })); await new Promise(resolve => setTimeout(resolve, 25)); } });
-    await expect(phone.locator('#last-swing')).toContainText('DRIVE');
-    await expect(phone.locator('#last-peak')).toContainText('450 deg/s');
+    await phone.evaluate(async () => { for (const speed of [0, 30, 90, 70, 0]) { window.dispatchEvent(new DeviceMotionEvent('devicemotion', { rotationRate: { alpha: speed, beta: 0, gamma: 0 } })); await new Promise(resolve => setTimeout(resolve, 25)); } });
+    await expect(phone.locator('#last-swing')).toContainText('SOFT');
+    await expect(phone.locator('#last-peak')).toContainText('90 deg/s');
     await expect.poll(() => page.evaluate(() => (window as unknown as { dink: Dink }).dink.eventLog.some(e => e.kind === 'hit' && e.side === 0))).toBe(true);
     await expect.poll(() => phone.evaluate(() => (window as unknown as { vibrations?: number }).vibrations ?? 0)).toBeGreaterThan(0);
     const download = phone.waitForEvent('download'); await phone.locator('#record').click(); expect((await download).suggestedFilename()).toMatch(/motion-soft-/);
@@ -179,6 +181,7 @@ test('online motion serves through the Court and phone loss returns to keyboard 
     await page.keyboard.press('m'); const pair = await page.evaluate(() => (window as unknown as { dink: Dink }).dink.controller.code);
     await fakePhone(phone, pair); await expect(page.locator('#control-mode')).toContainText('Controller connected');
     await page.waitForFunction(() => (window as unknown as { dink: Dink }).dink.controller.rtt !== null);
+    await page.waitForFunction(() => { const s = (window as unknown as { dink: Dink }).dink.state; return s.phase === 'serve' && s.server === 0 && s.tick - s.phaseTick >= 15; });
     await page.evaluate(() => (window as unknown as { dink: Dink }).dink.swing('drive'));
     await expect.poll(() => guest.evaluate(() => (window as unknown as { dink: Dink }).dink.eventLog.some(e => e.kind === 'hit' && e.side === 0))).toBe(true);
     await phone.evaluate(() => (window as unknown as { fake: WebSocket }).fake.close(1000));
@@ -196,4 +199,26 @@ test('quitting ends a pairing and re-entering with saved Motion opens a fresh co
   await page.getByRole('button', { name: /The Park/ }).click();
   await expect(page.locator('#controller-pairing')).toBeVisible();
   expect(await page.evaluate(() => (window as unknown as { dink: Dink }).dink.controller.code)).not.toBe(oldCode);
+});
+
+// Freeze rendering time, then drive the same input/Sim boundary used by normal frames.
+test('motion contact is immediate only: early and late swings cannot hit later', async ({ page }) => {
+  await start(page, '&motion&debug');
+  const result = await page.evaluate(async () => {
+    const d = (window as unknown as { dink: Dink & { viewTuning: { gameSpeed: number } } }).dink;
+    d.viewTuning.gameSpeed = 0;
+    const setup = (z: number) => {
+      d.newMatch(8); const s = d.state; s.phase = 'rally'; s.tick = 100; s.shots = 4;
+      s.ball.lastHitBy = 1; s.ball.bouncesSinceHit = 1; s.ball.pos = { x: .2, y: .9, z }; s.ball.vel = { x: 0, y: 0, z: 0 };
+      s.sides[0].players[0].pos = { x: 0, y: 0, z: 4 }; s.sides[0].players[0].commit = { type: 'soft', tick: 30, bestDistance: null };
+    };
+    const shots: number[] = [];
+    for (const z of [1.5, 3.55, 5.8]) {
+      setup(z); d.swing('drive'); d.advance(1); shots.push(d.state.shots);
+      if (z !== 3.55) { d.state.ball.pos = { x: .2, y: .9, z: 3.55 }; d.state.ball.vel = { x: 0, y: 0, z: 0 }; d.advance(7); shots.push(d.state.shots); }
+    }
+    setup(3.55); d.swing('drive'); window.dispatchEvent(new Event('blur')); d.advance(1); shots.push(d.state.shots);
+    return shots;
+  });
+  expect(result).toEqual([4, 4, 5, 4, 4, 4]);
 });

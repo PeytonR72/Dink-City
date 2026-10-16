@@ -1,6 +1,5 @@
 import { expect, it } from 'vitest';
 import { MotionSource } from '../src/input/motion';
-import { motionTuning } from '../src/input/motionTuning';
 import { keyboardContact } from '../src/input/input';
 import { createBot, DIFFICULTY } from '../src/bot/bot';
 import { observe } from '../src/bot/observe';
@@ -31,26 +30,81 @@ it('keyboard driver adapter matches every tick of the all-auto golden match', ()
   }
   expect(mismatch).toBe(-1); expect(auto.match.points).toEqual([11, 13]); expect(auto.tick).toBe(39353);
 }, 60000);
-it('a swing supplies exactly six contact ticks; manual motion does not become aim', () => {
-  const source = new MotionSource(simTuning); const state = incoming();
-  source.swing({ type: 'lob', aim: { x: -0.4, y: 0.8 }, at: 1000, strength: 1 });
-  for (let n = 0; n < 7; n++) {
+const swing = (at = 1000) => ({ type: 'drive' as const, aim: { x: -.4, y: .8 }, at, strength: 1 });
+const hitOf = (s: SimState) => s.events.find(e => e.kind === 'hit' && e.side === 0);
+it('a swing is one contact evaluation; manual movement does not become aim', () => {
+  const source = new MotionSource(simTuning); const state = incoming(); source.swing(swing());
+  for (let n = 0; n < 8; n++) {
     const intent = source.sample({ ...state, tick: 100 + n }, 0, { ...idle, move: { x: 1, y: 0 } }, 1000 + n * 16);
-    expect(intent.move).toEqual({ x: 1, y: 0 }); expect(intent.aim).toEqual({ x: -0.4, y: 0 }); expect(intent.contact).toBe(n < 6);
+    expect(intent.move).toEqual({ x: 1, y: 0 }); expect(intent.aim).toEqual({ x: -.4, y: 0 }); expect(intent.contact).toBe(n === 0);
   }
 });
-it('serves are presses, stale and cleared swings do not leak across interruptions', () => {
-  const source = new MotionSource(simTuning); const swing = { type: 'drive' as const, aim: { x: 0, y: 0 }, at: 1000, strength: 1 };
-  source.swing(swing); expect(source.sample(createInitialState(1), 0, idle, 1000)).toMatchObject({ shot: 'drive', contact: false });
-  source.swing(swing); source.clear(); expect(source.sample(incoming(), 0, idle, 1000).contact).toBe(false);
-  source.swing(swing); expect(source.sample(incoming(), 0, idle, 1600).contact).toBe(false);
-  source.swing({ ...swing, at: 1600 }); expect(source.sample(incoming(), 0, idle, 1600).contact).toBe(true);
-  const after = incoming(); after.ball.lastHitBy = 0; after.shots++; expect(source.sample(after, 0, idle, 1616).contact).toBe(false);
+it('an early miss cannot hit when the ball enters reach, despite retained preparation', () => {
+  const source = new MotionSource(simTuning); let state = incoming(); state.ball.pos.z = 1.5;
+  source.swing(swing()); state = step(state, [source.sample(state, 0, idle, 1000), idle], simTuning);
+  expect(hitOf(state)).toBeUndefined(); expect(state.sides[0].players[0].commit).not.toBeNull();
+  state.ball.pos = { x: .2, y: .9, z: 3.55 }; state.ball.vel = { x: 0, y: 0, z: 0 };
+  for (let n = 0; n < 8; n++) {
+    const intent = source.sample(state, 0, idle, 1016 + n * 16); expect(intent.contact).toBe(false);
+    state = step(state, [intent, idle], simTuning); expect(hitOf(state)).toBeUndefined();
+  }
 });
-it('lead restores transport-age ticks, and never affects sim tuning', () => {
-  const source = new MotionSource(simTuning, { ...motionTuning, swingLeadMs: 80 });
-  source.swing({ type: 'drive', aim: { x: 0, y: 0 }, at: 1000, strength: 1 });
-  expect(source.sample(incoming(), 0, idle, 1080).contact).toBe(true);
+it('a fresh in-reach swing hits immediately, including normal transport age over the old window', () => {
+  for (const age of [0, 80, 150, 300]) {
+    const source = new MotionSource(simTuning); const state = incoming(); source.swing(swing());
+    const intent = source.sample(state, 0, idle, 1000 + age);
+    expect(hitOf(step(state, [intent, idle], simTuning))).toMatchObject({ type: 'drive' });
+    expect(source.sample(state, 0, idle, 1016 + age).contact).toBe(false);
+  }
+});
+it('a late swing after the ball leaves reach misses and is not retried', () => {
+  const source = new MotionSource(simTuning); let state = incoming(); state.ball.pos.z = 5.8;
+  source.swing(swing()); state = step(state, [source.sample(state, 0, idle, 1000), idle], simTuning);
+  expect(hitOf(state)).toBeUndefined();
+  state.ball.pos = { x: .2, y: .9, z: 3.55 }; state.ball.vel = { x: 0, y: 0, z: 0 };
+  expect(hitOf(step(state, [source.sample(state, 0, idle, 1016), idle], simTuning))).toBeUndefined();
+});
+it('duplicate, older and cancelled deliveries never revive contact; fresh swings remain independent', () => {
+  const source = new MotionSource(simTuning); const state = incoming();
+  source.swing(swing()); expect(source.sample(state, 0, idle, 1000).contact).toBe(true);
+  source.swing(swing()); source.swing(swing(999)); expect(source.sample(state, 0, idle, 1016).contact).toBe(false);
+  source.swing(swing(1100)); source.clear(); source.swing(swing(1100)); expect(source.sample(state, 0, idle, 1100).contact).toBe(false);
+  source.swing(swing(1200)); source.swing({ ...swing(1201), type: 'lob' });
+  expect(source.sample(state, 0, idle, 1201)).toMatchObject({ shot: 'lob', contact: true });
+  expect(source.sample(state, 0, idle, 1217).contact).toBe(false);
+  const outgoing = incoming(); outgoing.ball.lastHitBy = 0; source.swing(swing(1300));
+  expect(source.sample(outgoing, 0, idle, 1300).contact).toBe(false);
+  expect(source.sample(state, 0, idle, 1316).contact).toBe(false);
+});
+it('stale, future and dead-phase events are discarded, with no scheduled future hit', () => {
+  for (const [at, now, phase] of [[1000, 1500, 'rally'], [2000, 1000, 'rally'], [1000, 1000, 'dead']] as const) {
+    const source = new MotionSource(simTuning); const state = incoming(); state.phase = phase;
+    source.swing(swing(at)); expect(source.sample(state, 0, idle, now).contact).toBe(false);
+    expect(source.sample(incoming(), 0, idle, at + 16).contact).toBe(false);
+  }
+  const source = new MotionSource(simTuning); source.swing(swing(1050));
+  expect(source.sample(incoming(), 0, idle, 1000).contact).toBe(true); // clock skew: now, never later
+  expect(source.sample(incoming(), 0, idle, 1050).contact).toBe(false);
+});
+it('serves remain single presses; swinging before serve-ready does not queue a serve', () => {
+  for (const ready of [false, true]) {
+    const source = new MotionSource(simTuning); let state = createInitialState(1, { ...DEFAULT_MATCH, contactMode: ['reported', 'auto'] });
+    state.server = 0; state.tick = ready ? 100 : 0; state.phaseTick = 0;
+    source.swing(swing()); const intent = source.sample(state, 0, idle, 1000);
+    expect(intent).toMatchObject({ shot: 'drive', contact: false });
+    state = step(state, [intent, idle], simTuning); expect(state.phase).toBe(ready ? 'rally' : 'serve');
+    if (!ready) { state.tick = 100; state = step(state, [source.sample(state, 0, idle, 1016), idle], simTuning); expect(state.phase).toBe('serve'); }
+  }
+});
+it('online prediction and missing-input fade do not extend a missed motion contact', () => {
+  const source = new MotionSource(simTuning); const start = incoming(); start.ball.pos.z = 1.5; start.ball.vel.z = 20;
+  const predictor = createPredictor({ local: 0, start, tuning: simTuning }); source.swing(swing());
+  expect(predictor.stamp(start.tick, source.sample(start, 0, idle, 1000)).intent.contact).toBe(true);
+  expect(hitOf(predictor.curr)).toBeUndefined();
+  for (let n = 1; n < 7; n++) {
+    const intent = source.sample(predictor.curr, 0, idle, 1000 + n * 16);
+    expect(predictor.stamp(start.tick + n, intent).intent.contact).toBeFalsy(); expect(hitOf(predictor.curr)).toBeUndefined();
+  }
 });
 it('online prediction respects an explicit no-contact, and a reported type change', () => {
   const start = incoming();

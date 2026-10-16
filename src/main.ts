@@ -271,7 +271,7 @@ function refreshControls() {
   const label = input.mode === 'keyboard' ? manualLabel().toUpperCase() : input.mode.toUpperCase();
   const state = input.mode === 'motion' ? (input.controller ? ' · Controller connected · ' + (controller.rtt === null ? 'measuring RTT' : Math.round(controller.rtt) + ' ms RTT') : input.debugMotion ? ' · Debug Swing' : ' · ' + manualLabel() + ' fallback') : '';
   controlBadge.textContent = label + state; pauseControls.textContent = 'Controls: ' + label + ' (M)';
-  if (debugLatency) debugLatency.textContent = 'Controller RTT: ' + (controller.rtt === null ? '—' : Math.round(controller.rtt) + ' ms') + ' · lead ' + motionTuning.swingLeadMs + ' ms · window ' + motionTuning.swingWindowTicks + ' ticks';
+  if (debugLatency) debugLatency.textContent = 'Controller RTT: ' + (controller.rtt === null ? '-' : Math.round(controller.rtt) + ' ms') + ' · contact: one tick, no swing buffer';
   (pause.el.querySelector('#resume') as HTMLButtonElement).disabled = controllerPaused && !input.controller && input.mode === 'motion';
   settingsPanel.update({ ...saved, controls: input.mode });
   if (match === offline && offline.practice) showPractice();

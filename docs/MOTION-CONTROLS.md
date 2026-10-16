@@ -41,13 +41,13 @@ Run CPU-heavy unit and SwiftShader browser suites sequentially. Running them tog
 | Light separate phone entry | build-time transitive dependency guard | Automated |
 | Traces, live tuning, JSON recorder | browser synthetic record/download; fixture README | Automated UI; human recordings pending |
 | Soft/Drive/Lob classifier and no duplicate peaks | pure synthetic gesture tests | Mechanics verified; recorded-human accuracy pending |
-| Timestamp alignment, RTT, swing lead/window | clock tests, browser measured local RTT handshake | Automated mechanics; Wi-Fi/mobile measurements pending |
+| Timestamp alignment, RTT, single contact evaluation | clock tests, no-buffer timing tests, browser RTT handshake | Automated mechanics; Wi-Fi/mobile measurements pending |
 | Hit haptic response | phone-to-relay-to-Sim-to-phone browser test with vibrate spy | Automated message flow; physical vibration pending |
 | Human side-by-side and online Match | ticket 06 | Pending human acceptance |
 
 ## Current defaults and intentional choices
 
-Swing window: 6 Ticks (100 ms). Swing lead: 0 ms. Maximum age: 400 ms. Peak threshold: 100 deg/s; Drive threshold: 330 deg/s; Lob rise: 22 degrees. Aim spans 45 degrees; depth is zero. Peak fall ratio: .65, settle ratio: .5, cooldown: 400 ms, sample window: 240 ms, tilt cadence: 50 ms. Auto-move speed: .9, reaction: 14 Ticks. Auto-move uses Neutral Bot positioning without the Bot's random late/off-center/unforced-error handicaps, to keep Auto-Commit early. These are initial defaults, not human-tuned values.
+Swing contact: one input Tick, with no retained window or lead. Maximum input age: 400 ms (freshness rejection only). Peak threshold: 85 deg/s; Drive threshold: 330 deg/s; Lob rise: 22 degrees. Aim spans 45 degrees; depth is zero. Peak fall ratio: .8, settle ratio: .5, cooldown: 400 ms, sample window: 240 ms, tilt cadence: 50 ms. Auto-move speed: .9, reaction: 14 Ticks. Auto-move uses Neutral Bot positioning without the Bot's random late/off-center/unforced-error handicaps, to keep Auto-Commit early. These modest recognition defaults respond to the user's first physical playtest report; improved hardware accuracy is not yet verified.
 
 Keyboard contact is filled at the driver boundary, once both Intents exist, rather than with a guessed remote Intent inside sample(). Online keyboard autoContact remains after input quantization. Explicit motion contact=false survives prediction; true still passes the Sim's reach/rule checks. The small recommit extension distinguishes keyboard's fresh type press from a Motion Swing at the identical Contact tick. Every flag is logged/replayed and encoded online.
 
@@ -76,3 +76,15 @@ Hosted synthetic verification is separate from the real iPhone/Android and netwo
 - Golden Bots: points [11, 13], Tick 39353 unchanged; full keyboard-vs-auto parity is checked on every Tick. Replays and online prediction/reconciliation tests pass.
 - Existing local Wrangler emits transport teardown messages (“Network connection lost”) during both existing Court tests and new Controller tests; close/replacement/reconnect assertions pass. A smoke invocation after the test server had stopped failed to connect, then passed with Wrangler running as documented.
 - Before push, the public production menu exposed no Play online button, returned HTTP 200 and had no browser page errors. The live Worker is not configured in that client. Vercel API inspection for the intended team returned 403; use GitHub's Vercel commit/deployment statuses to verify the Git-triggered release. No credentials or permissions were changed.
+
+## No-buffer timing revision, 2026-10-16
+
+Every recognized Swing gets one contact evaluation on the next normal input Tick, then is consumed regardless of reach. Early swings do not stay armed; late swings miss. Multiple events before the same input sample coalesce to the newest rather than building a queue. Duplicate/older timestamps are ignored and clear() cancels a pending event without making its duplicate eligible again. The asynchronous event-to-input handoff is not a future hit window.
+
+Auto-move and provisional Soft setup are retained to position the player and preserve normal shot-quality timing. They always report contact=false unless a fresh Swing is consumed on that Tick; setup cannot hit a ball later on its own. Clock alignment remains for freshness checks. Transport age does not shrink or extend Contact; mildly future timestamps from clock skew are evaluated now, not scheduled, and those over 100 ms ahead are discarded. No Sim, wire-format or Worker changes are needed: protocol 9 / Sim 2 still match.
+
+Detection changes: minimum rotation peak 100 -> 85 deg/s; peak fall .65 -> .8, so recognition needs a 20% slowdown rather than 35%. The quiet rearm sample is kept as the next baseline. Drive/Lob classification thresholds, 400 ms cooldown, settling guard and reach geometry are unchanged.
+
+Retest on the physical phone after reloading BOTH game and controller pages: pair/calibrate, confirm a ready serve, try deliberate early swings (must miss even as the ball later approaches), in-reach swings, and late swings. Try modest swings plus rest, walking and setting the phone down. Confirm one event per swing, then repeat after pausing/reconnecting. Use controller.html?pair=CODE&debug and the trace recorder to distinguish detected gestures from out-of-reach misses and capture failed examples. Record device/browser and displayed RTT; do not infer hardware success from synthetic tests.
+
+Revision verification: all 504 unit tests passed (44 files), with one explicitly skipped recorded-human gate. Both TypeScript checks and the production build pass. The final full Playwright run passed all 46 tests, including real local relay delivery of a synthetic 90 deg/s Soft gesture, one-evaluation early/in-reach/late contact, cancellation, online peer delivery, keyboard/gamepad, touch, replay, and unchanged screenshot references. The first full browser run had two hit-observation failures and a rooftop stabilization timeout; diagnostic motion reruns passed, ready-serve preconditions were made explicit, and the complete final rerun passed without relaxing assertions, timeouts, or image baselines. Worker/Sim/netcode/touch source files are unchanged.
